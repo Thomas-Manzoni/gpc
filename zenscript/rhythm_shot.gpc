@@ -14,8 +14,8 @@
 //
 // Total motion length is TOTAL_TIME + RISE_TIME.
 
-int TOTAL_TIME = 571; // ms, stick held down before the lift starts
-int RISE_TIME  = 90;  // ms, how fast the stick is pulled up (5 - 300)
+int TOTAL_TIME = 600; // ms, stick held down before the lift starts
+int RISE_TIME  = 110;  // ms, how fast the stick is pulled up (5 - 300)
 
 define TRIGGER = XB1_RS; // right stick click
 define RX      = XB1_RX;

@@ -4,7 +4,7 @@
 // releases at the exact same moment. Tune the value below until you
 // consistently hit "Green".
 
-int SHOT_RELEASE_TIME = 571; // <-- set your release time here (ms)
+int SHOT_RELEASE_TIME = 590; // <-- set your release time here (ms)
 
 define SHOT_BUTTON = XB1_X; // PS: SQUARE  |  Xbox: use XB1_X instead
 
