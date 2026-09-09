@@ -1,0 +1,29 @@
+// NBA 2K - Auto Green Shot
+// Hold the shot button like normal (SQUARE / X). The script takes over
+// and releases it for you after SHOT_RELEASE_TIME ms, so every shot
+// releases at the exact same moment. Tune the value below until you
+// consistently hit "Green".
+
+int SHOT_RELEASE_TIME = 571; // <-- set your release time here (ms)
+
+define SHOT_BUTTON = XB1_X; // PS: SQUARE  |  Xbox: use XB1_X instead
+
+int shooting = 0;
+
+main {
+    if(get_val(SHOT_BUTTON) && !shooting) {
+        shooting = 1;
+        combo_run(AutoGreenShot);
+    }
+
+    if(!get_val(SHOT_BUTTON)) {
+        shooting = 0;
+    }
+}
+
+combo AutoGreenShot {
+    set_val(SHOT_BUTTON, 100);
+    wait(SHOT_RELEASE_TIME);
+    set_val(SHOT_BUTTON, 0);
+    wait(50);
+}

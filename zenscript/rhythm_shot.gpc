@@ -1,0 +1,79 @@
+// NBA 2K27 - Rhythm Shooting (Xbox)
+//
+// Rhythm shooting = pull the RIGHT STICK DOWN, hold, then flick it
+// quickly UP. This script does the whole motion for you.
+//
+// Trigger: press RS (right stick click).
+//
+// Two parameters:
+//   TOTAL_TIME  - ms from the moment the stick goes DOWN until the
+//                 lift UP starts (this is your rhythm timing).
+//   RISE_TIME   - "speed" of the pull up: ms it takes the stick to
+//                 travel from full down to full up. Smaller = faster
+//                 flick, larger = slower/smoother pull.
+//
+// Total motion length is TOTAL_TIME + RISE_TIME.
+
+int TOTAL_TIME = 571; // ms, stick held down before the lift starts
+int RISE_TIME  = 90;  // ms, how fast the stick is pulled up (5 - 300)
+
+define TRIGGER = XB1_RS; // right stick click
+define RX      = XB1_RX;
+define RY      = XB1_RY;
+
+// Right stick Y: +100 = down, -100 = up
+define STICK_DOWN = 100;
+define STICK_UP   = -100;
+
+define IDLE = 0;
+define HOLD_DOWN = 1;
+define PULL_UP = 2;
+
+int state = IDLE;
+int timer = 0;
+int hold_time = 0;
+int rise = 0;
+int value = 0;
+
+init {
+    // clamp so the maths below stay inside 16-bit range
+    if(RISE_TIME < 5)   { RISE_TIME = 5; }
+    if(RISE_TIME > 300) { RISE_TIME = 300; }
+    if(TOTAL_TIME < 0)  { TOTAL_TIME = 0; }
+}
+
+main {
+    if(state == IDLE) {
+        if(event_press(TRIGGER)) {
+            rise      = RISE_TIME;
+            hold_time = TOTAL_TIME;
+            timer     = 0;
+            state     = HOLD_DOWN;
+        }
+    }
+
+    if(state != IDLE) {
+        set_val(TRIGGER, 0); // don't send the RS click to the game
+        set_val(RX, 0);      // keep the shot straight
+        timer = timer + get_rtime();
+
+        if(state == HOLD_DOWN) {
+            set_val(RY, STICK_DOWN);
+            if(timer >= hold_time) {
+                timer = 0;
+                state = PULL_UP;
+            }
+        } else {
+            if(timer >= rise) {
+                set_val(RY, STICK_UP);
+                state = IDLE;
+                timer = 0;
+            } else {
+                // linear ramp from +100 (down) to -100 (up)
+                // split as *100 then *2 to stay inside 16-bit maths
+                value = STICK_DOWN - (((timer * 100) / rise) * 2);
+                set_val(RY, value);
+            }
+        }
+    }
+}
