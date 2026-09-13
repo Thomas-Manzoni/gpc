@@ -1,25 +1,45 @@
 // NBA 2K27 - Rhythm Shooting (Xbox)
+// Cronus Zen / GPC Studio
 //
 // Rhythm shooting = pull the RIGHT STICK DOWN, hold, then flick it
 // quickly UP. This script does the whole motion for you.
 //
 // Trigger: press RS (right stick click).
 //
-// Two parameters:
-//   TOTAL_TIME  - ms from the moment the stick goes DOWN until the
-//                 lift UP starts (this is your rhythm timing).
-//   RISE_TIME   - "speed" of the pull up: ms it takes the stick to
-//                 travel from full down to full up. Smaller = faster
-//                 flick, larger = slower/smoother pull.
+// Two parameters, both live-tunable and auto-saved:
+//   TOTAL - ms from the moment the stick goes DOWN until the lift UP
+//           starts (this is your rhythm timing).
+//   RISE  - "speed" of the pull up: ms it takes the stick to travel
+//           from full down to full up. Smaller = faster flick.
 //
-// Total motion length is TOTAL_TIME + RISE_TIME.
+// Total motion length is TOTAL + RISE.
+//
+// Live tuning (works any time, even mid-game):
+//   LT + RT + D-Pad LEFT / RIGHT -> TOTAL -1 / +1
+//   LT + RT + D-Pad DOWN / UP    -> RISE  -1 / +1
+// Changes are written to persistent memory automatically a moment
+// after you stop adjusting.
 
-int TOTAL_TIME = 600; // ms, stick held down before the lift starts
-int RISE_TIME  = 110;  // ms, how fast the stick is pulled up (5 - 300)
+define TRIGGER   = XB1_RS; // right stick click
+define RX        = XB1_RX;
+define RY        = XB1_RY;
+define LT_BUTTON = XB1_LT;
+define RT_BUTTON = XB1_RT;
 
-define TRIGGER = XB1_RS; // right stick click
-define RX      = XB1_RX;
-define RY      = XB1_RY;
+define TRIGGER_THRESHOLD = 50; // LT/RT are analog, 0-100
+
+// One profile for now; more shot types will be added here later.
+define SHOT_STATIC = 0;
+
+define TOTAL_TIME_MIN     = 100;
+define TOTAL_TIME_MAX     = 2000;
+define TOTAL_TIME_DEFAULT = 600;
+
+define RISE_TIME_MIN     = 5;   // keeps the ramp maths inside 16-bit
+define RISE_TIME_MAX     = 300;
+define RISE_TIME_DEFAULT = 140;
+
+define SAVE_DELAY = 400; // ms of no changes before writing to flash
 
 // Right stick Y: +100 = down, -100 = up
 define STICK_DOWN = 100;
@@ -29,22 +49,81 @@ define IDLE = 0;
 define HOLD_DOWN = 1;
 define PULL_UP = 2;
 
+int profile = SHOT_STATIC;
+int TOTAL_TIME;
+int RISE_TIME;
 int state = IDLE;
 int timer = 0;
 int hold_time = 0;
 int rise = 0;
 int value = 0;
+int adjusting = 0;
+int dirty = 0;
+int save_timer = 0;
+int saved_timer = 0;
+int digits = 0;
 
 init {
-    // clamp so the maths below stay inside 16-bit range
-    if(RISE_TIME < 5)   { RISE_TIME = 5; }
-    if(RISE_TIME > 300) { RISE_TIME = 300; }
-    if(TOTAL_TIME < 0)  { TOTAL_TIME = 0; }
+    TOTAL_TIME = get_pvar(SPVAR_2, TOTAL_TIME_MIN, TOTAL_TIME_MAX, TOTAL_TIME_DEFAULT);
+    RISE_TIME  = get_pvar(SPVAR_3, RISE_TIME_MIN, RISE_TIME_MAX, RISE_TIME_DEFAULT);
 }
 
 main {
+    adjusting = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RT_BUTTON) > TRIGGER_THRESHOLD;
+
+    if(adjusting) {
+        if(event_press(XB1_RIGHT) && TOTAL_TIME < TOTAL_TIME_MAX) {
+            TOTAL_TIME = TOTAL_TIME + 1;
+            dirty      = 1;
+            save_timer = SAVE_DELAY;
+        }
+        if(event_press(XB1_LEFT) && TOTAL_TIME > TOTAL_TIME_MIN) {
+            TOTAL_TIME = TOTAL_TIME - 1;
+            dirty      = 1;
+            save_timer = SAVE_DELAY;
+        }
+        if(event_press(XB1_UP) && RISE_TIME < RISE_TIME_MAX) {
+            RISE_TIME  = RISE_TIME + 1;
+            dirty      = 1;
+            save_timer = SAVE_DELAY;
+        }
+        if(event_press(XB1_DOWN) && RISE_TIME > RISE_TIME_MIN) {
+            RISE_TIME  = RISE_TIME - 1;
+            dirty      = 1;
+            save_timer = SAVE_DELAY;
+        }
+
+        // don't let the tuning combo leak inputs into the game
+        set_val(LT_BUTTON, 0);
+        set_val(RT_BUTTON, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+    }
+
+    // debounced write so holding a direction doesn't hammer the flash
+    if(dirty) {
+        save_timer = save_timer - get_rtime();
+        if(save_timer <= 0) {
+            set_pvar(SPVAR_2, TOTAL_TIME);
+            set_pvar(SPVAR_3, RISE_TIME);
+            dirty       = 0;
+            saved_timer = 800;
+        }
+    }
+
+    if(saved_timer > 0) {
+        saved_timer = saved_timer - get_rtime();
+        if(saved_timer < 0) { saved_timer = 0; }
+    }
+
+    // Implement the detecting logic for moving shots, etc here and set the rise and total time
+    // Maybe add a state in case I want to cannect it with the dribble (rumble) etc and then
+    // when the state is true check the conditions to when start the shot (probably some iterations will wait some ms
+    // before starting the shot)
     if(state == IDLE) {
-        if(event_press(TRIGGER)) {
+        if(!adjusting && event_press(TRIGGER)) {
             rise      = RISE_TIME;
             hold_time = TOTAL_TIME;
             timer     = 0;
@@ -75,5 +154,70 @@ main {
                 set_val(RY, value);
             }
         }
+    }
+
+    cls_oled(OLED_BLACK);
+
+    if(profile == SHOT_STATIC) {
+        putc_oled(1, ASCII_UPPER_S);
+        putc_oled(2, ASCII_UPPER_T);
+        putc_oled(3, ASCII_UPPER_A);
+        putc_oled(4, ASCII_UPPER_T);
+        putc_oled(5, ASCII_UPPER_I);
+        putc_oled(6, ASCII_UPPER_C);
+        putc_oled(7, ASCII_SPACE);
+        putc_oled(8, ASCII_UPPER_S);
+        putc_oled(9, ASCII_UPPER_H);
+        putc_oled(10, ASCII_UPPER_O);
+        putc_oled(11, ASCII_UPPER_T);
+        puts_oled(2, 0, OLED_FONT_MEDIUM, 11, OLED_WHITE);
+    }
+
+    putc_oled(1, ASCII_UPPER_T);
+    putc_oled(2, ASCII_UPPER_O);
+    putc_oled(3, ASCII_UPPER_T);
+    putc_oled(4, ASCII_UPPER_A);
+    putc_oled(5, ASCII_UPPER_L);
+    puts_oled(2, 22, OLED_FONT_SMALL, 5, OLED_WHITE);
+
+    putc_oled(1, ASCII_UPPER_R);
+    putc_oled(2, ASCII_UPPER_I);
+    putc_oled(3, ASCII_UPPER_S);
+    putc_oled(4, ASCII_UPPER_E);
+    puts_oled(76, 22, OLED_FONT_SMALL, 4, OLED_WHITE);
+
+    digits = 0;
+    if(TOTAL_TIME >= 1000) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + (TOTAL_TIME / 1000));
+    }
+    digits = digits + 1;
+    putc_oled(digits, ASCII_DIGIT0 + ((TOTAL_TIME / 100) % 10));
+    digits = digits + 1;
+    putc_oled(digits, ASCII_DIGIT0 + ((TOTAL_TIME / 10) % 10));
+    digits = digits + 1;
+    putc_oled(digits, ASCII_DIGIT0 + (TOTAL_TIME % 10));
+    puts_oled(2, 34, OLED_FONT_MEDIUM, digits, OLED_WHITE);
+
+    digits = 0;
+    if(RISE_TIME >= 100) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + (RISE_TIME / 100));
+    }
+    if(RISE_TIME >= 10) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + ((RISE_TIME / 10) % 10));
+    }
+    digits = digits + 1;
+    putc_oled(digits, ASCII_DIGIT0 + (RISE_TIME % 10));
+    puts_oled(76, 34, OLED_FONT_MEDIUM, digits, OLED_WHITE);
+
+    if(saved_timer > 0) {
+        putc_oled(1, ASCII_UPPER_S);
+        putc_oled(2, ASCII_UPPER_A);
+        putc_oled(3, ASCII_UPPER_V);
+        putc_oled(4, ASCII_UPPER_E);
+        putc_oled(5, ASCII_UPPER_D);
+        puts_oled(2, 54, OLED_FONT_SMALL, 5, OLED_WHITE);
     }
 }

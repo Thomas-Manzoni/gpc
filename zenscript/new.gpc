@@ -1,19 +1,47 @@
 // NBA 2K - Auto Green Shot
-// Hold the shot button like normal (SQUARE / X). The script takes over
-// and releases it for you after SHOT_RELEASE_TIME ms, so every shot
+// Hold the shot button like normal (SQUARE / X). Right before the shot
+// motion starts, the script presses LT and releases every other button
+// (even if you're still holding one), then holds the shot button and
+// releases it for you after SHOT_RELEASE_TIME ms, so every shot
 // releases at the exact same moment. Tune the value below until you
 // consistently hit "Green".
 
-int SHOT_RELEASE_TIME = 590; // <-- set your release time here (ms)
+int SHOT_RELEASE_TIME = 571; // <-- set your release time here (ms)
 
-define SHOT_BUTTON = XB1_X; // PS: SQUARE  |  Xbox: use XB1_X instead
+define TRIG_BUTTON = XB1_RS; // PS: SQUARE  |  Xbox: use XB1_X insteads
+define SHOT_BUTTON = XB1_X;
+define LT_BUTTON   = XB1_LT;
 
 int shooting = 0;
 
 main {
-    if(get_val(SHOT_BUTTON) && !shooting) {
+    if(get_val(TRIG_BUTTON) && !shooting) {
         shooting = 1;
         combo_run(AutoGreenShot);
+    }
+
+    // for as long as the shot is running, force every other input to
+    // released so nothing interferes with LT + the shot button
+    if(shooting) {
+        set_val(XB1_A, 0);
+        set_val(XB1_B, 0);
+        set_val(XB1_Y, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+        set_val(XB1_LB, 0);
+        set_val(XB1_RB, 0);
+        set_val(XB1_RT, 0);
+        set_val(XB1_LS, 0);
+        set_val(XB1_RS, 0);
+        set_val(XB1_VIEW, 0);
+        set_val(XB1_MENU, 0);
+        set_val(XB1_XBOX, 0);
+        set_val(XB1_LX, 0);
+        set_val(XB1_LY, 0);
+        set_val(XB1_RX, 0);
+        set_val(XB1_RY, 0);
     }
 
     if(!get_val(SHOT_BUTTON)) {
@@ -22,6 +50,10 @@ main {
 }
 
 combo AutoGreenShot {
+    set_val(LT_BUTTON, 100);
+    wait(20);
+    set_val(LT_BUTTON, 0);
+	wait(20);
     set_val(SHOT_BUTTON, 100);
     wait(SHOT_RELEASE_TIME);
     set_val(SHOT_BUTTON, 0);

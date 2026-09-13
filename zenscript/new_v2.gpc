@@ -1,0 +1,163 @@
+// NBA 2K - Auto Green Shot (v2, live-configurable release time)
+// Cronus Zen / GPC Studio
+//
+// Normal play: hold the shot button like usual (SQUARE / X). The
+// script presses LT, releases every other button, then holds the shot
+// button and releases it for you after SHOT_RELEASE_TIME ms.
+//
+// Live tuning (works any time, even mid-game):
+//   LT + RT + D-Pad RIGHT  -> SHOT_RELEASE_TIME + 1
+//   LT + RT + D-Pad LEFT   -> SHOT_RELEASE_TIME - 1
+//   LT + RT + D-Pad UP     -> save the value so it's restored the next
+//                             time the script loads
+// The current value is always shown on the OLED.
+
+define TRIG_BUTTON = XB1_RS; // PS: SQUARE  |  Xbox: use XB1_X insteads
+define SHOT_BUTTON = XB1_X;
+define LT_BUTTON   = XB1_LT;
+define RT_BUTTON   = XB1_RT;
+
+define TRIGGER_THRESHOLD = 50; // LT/RT are analog, 0-100
+
+define RELEASE_TIME_MIN     = 100;
+define RELEASE_TIME_MAX     = 2000;
+define RELEASE_TIME_DEFAULT = 571;
+
+int SHOT_RELEASE_TIME;
+int shooting    = 0;
+int adjusting   = 0;
+int saved_timer = 0;
+int digits      = 0;
+
+init {
+    SHOT_RELEASE_TIME = get_pvar(SPVAR_1, RELEASE_TIME_MIN, RELEASE_TIME_MAX, RELEASE_TIME_DEFAULT);
+}
+
+main {
+    adjusting = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RT_BUTTON) > TRIGGER_THRESHOLD;
+
+    if(adjusting) {
+        if(event_press(XB1_RIGHT) && SHOT_RELEASE_TIME < RELEASE_TIME_MAX) {
+            SHOT_RELEASE_TIME = SHOT_RELEASE_TIME + 1;
+        }
+        if(event_press(XB1_LEFT) && SHOT_RELEASE_TIME > RELEASE_TIME_MIN) {
+            SHOT_RELEASE_TIME = SHOT_RELEASE_TIME - 1;
+        }
+        if(event_press(XB1_UP)) {
+            set_pvar(SPVAR_1, SHOT_RELEASE_TIME);
+            saved_timer = 1000;
+        }
+
+        // don't let the tuning combo leak inputs into the game
+        set_val(LT_BUTTON, 0);
+        set_val(RT_BUTTON, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+    }
+
+    if(saved_timer > 0) {
+        saved_timer = saved_timer - get_rtime();
+        if(saved_timer < 0) { saved_timer = 0; }
+    }
+
+    if(!adjusting && get_val(TRIG_BUTTON) && !shooting) {
+        shooting = 1;
+        combo_run(AutoGreenShot);
+    }
+
+    // for as long as the shot is running, force every other input to
+    // released so nothing interferes with LT + the shot button
+    if(shooting) {
+        set_val(XB1_A, 0);
+        set_val(XB1_B, 0);
+        set_val(XB1_Y, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+        set_val(XB1_LB, 0);
+        set_val(XB1_RB, 0);
+        set_val(XB1_RT, 0);
+        set_val(XB1_LS, 0);
+        set_val(XB1_RS, 0);
+        set_val(XB1_VIEW, 0);
+        set_val(XB1_MENU, 0);
+        set_val(XB1_XBOX, 0);
+        set_val(XB1_LX, 0);
+        set_val(XB1_LY, 0);
+        set_val(XB1_RX, 0);
+        set_val(XB1_RY, 0);
+    }
+
+    if(!get_val(SHOT_BUTTON)) {
+        shooting = 0;
+    }
+
+    cls_oled(OLED_BLACK);
+
+    putc_oled(1, ASCII_UPPER_R);
+    putc_oled(2, ASCII_UPPER_E);
+    putc_oled(3, ASCII_UPPER_L);
+    putc_oled(4, ASCII_UPPER_E);
+    putc_oled(5, ASCII_UPPER_A);
+    putc_oled(6, ASCII_UPPER_S);
+    putc_oled(7, ASCII_UPPER_E);
+    putc_oled(8, ASCII_SPACE);
+    putc_oled(9, ASCII_UPPER_M);
+    putc_oled(10, ASCII_UPPER_S);
+    puts_oled(2, 0, OLED_FONT_MEDIUM, 10, OLED_WHITE);
+
+    digits = 0;
+    if(SHOT_RELEASE_TIME >= 1000) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + (SHOT_RELEASE_TIME / 1000));
+    }
+    digits = digits + 1;
+    putc_oled(digits, ASCII_DIGIT0 + ((SHOT_RELEASE_TIME / 100) % 10));
+    digits = digits + 1;
+    putc_oled(digits, ASCII_DIGIT0 + ((SHOT_RELEASE_TIME / 10) % 10));
+    digits = digits + 1;
+    putc_oled(digits, ASCII_DIGIT0 + (SHOT_RELEASE_TIME % 10));
+    puts_oled(2, 20, OLED_FONT_LARGE, digits, OLED_WHITE);
+
+    if(saved_timer > 0) {
+        putc_oled(1, ASCII_UPPER_S);
+        putc_oled(2, ASCII_UPPER_A);
+        putc_oled(3, ASCII_UPPER_V);
+        putc_oled(4, ASCII_UPPER_E);
+        putc_oled(5, ASCII_UPPER_D);
+        puts_oled(2, 50, OLED_FONT_SMALL, 5, OLED_WHITE);
+    } else {
+        if(adjusting) {
+            putc_oled(1, ASCII_LESS_THAN);
+            putc_oled(2, ASCII_SPACE);
+            putc_oled(3, ASCII_UPPER_A);
+            putc_oled(4, ASCII_UPPER_D);
+            putc_oled(5, ASCII_UPPER_J);
+            putc_oled(6, ASCII_SPACE);
+            putc_oled(7, ASCII_GREATER_THAN);
+            putc_oled(8, ASCII_SPACE);
+            putc_oled(9, ASCII_UPPER_U);
+            putc_oled(10, ASCII_UPPER_P);
+            putc_oled(11, ASCII_EQUAL);
+            putc_oled(12, ASCII_UPPER_S);
+            putc_oled(13, ASCII_UPPER_A);
+            putc_oled(14, ASCII_UPPER_V);
+            putc_oled(15, ASCII_UPPER_E);
+            puts_oled(2, 50, OLED_FONT_SMALL, 15, OLED_WHITE);
+        }
+    }
+}
+
+combo AutoGreenShot {
+    set_val(LT_BUTTON, 100);
+    wait(20);
+    set_val(LT_BUTTON, 0);
+    wait(20);
+    set_val(SHOT_BUTTON, 100);
+    wait(SHOT_RELEASE_TIME);
+    set_val(SHOT_BUTTON, 0);
+    wait(50);
+}

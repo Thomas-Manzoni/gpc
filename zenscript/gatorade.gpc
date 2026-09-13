@@ -1,0 +1,323 @@
+// Gatorade - activity automation
+//
+// D-Pad UP   -> start the current activity
+//               TREADMILL: alternating LT / RT, always starting with LT
+//               PULLUPS / BENCHPRESS: one rep per press
+//               SPRINT: alternating LT / RT until you press A, B, X or Y
+// D-Pad DOWN -> stop it
+// LT + RT + D-Pad LEFT / RIGHT -> switch activity
+//
+// TREADMILL: alternates LT and RT presses. The gap between presses
+// oscillates between STEP_DELAY_MIN and STEP_DELAY_MAX so the rhythm
+// isn't perfectly constant.
+//
+// PULLUPS: both sticks down for PULLUP_DOWN_TIME, then both up for
+// PULLUP_UP_TIME, then released.
+//
+// BENCHPRESS: same motion with its own timings (BENCH_DOWN_TIME /
+// BENCH_UP_TIME).
+//
+// BOX JUMPS: like PULLUPS but left stick only. The down-hold shortens
+// as you go: reps 1-3 use BOXJUMP_DOWN_TIME_1, reps 4-6
+// BOXJUMP_DOWN_TIME_2, reps 7-9 BOXJUMP_DOWN_TIME_3, then
+// BOXJUMP_DOWN_TIME_4. The up-hold is always
+// BOXJUMP_UP_TIME.
+// The count restarts every time you select the activity from the menu.
+
+define LT_BUTTON = XB1_LT;
+define RT_BUTTON = XB1_RT;
+
+define TRIGGER_THRESHOLD = 50; // LT/RT are analog, 0-100
+
+define PRESS_TIME      = 40; // ms each trigger is held
+define STEP_DELAY_MIN  = 70; // ms
+define STEP_DELAY_MAX  = 90; // ms
+define STEP_DELAY_INCR = 3;  // ms added/removed each cycle
+
+define ACT_TREADMILL  = 0;
+define ACT_PULLUPS    = 1;
+define ACT_BENCHPRESS = 2;
+define ACT_SPRINT     = 3;
+define ACT_BOXJUMPS   = 4;
+define ACT_COUNT      = 5;
+
+define SPRINT_DELAY = 60; // ms between the alternating LT / RT presses
+
+define PULLUP_DOWN_TIME = 150; // ms sticks are held down
+define PULLUP_UP_TIME   = 350; // ms sticks are held up
+
+define BENCH_DOWN_TIME = 300; // ms sticks are held down
+define BENCH_UP_TIME   = 300; // ms sticks are held up
+
+define BOXJUMP_DOWN_TIME_1 = 650; // ms left stick is held down, reps 1-3
+define BOXJUMP_DOWN_TIME_2 = 560; // ms, reps 4-6
+define BOXJUMP_DOWN_TIME_3 = 500; // ms, reps 7-9
+define BOXJUMP_DOWN_TIME_4 = 440; // ms, reps 10+
+define BOXJUMP_UP_TIME     = 300; // ms left stick is held up
+
+int activity    = ACT_TREADMILL;
+int adjusting   = 0;
+int running     = 0;
+int step_delay  = STEP_DELAY_MIN;
+int step_dir    = STEP_DELAY_INCR;
+int cur_btn     = LT_BUTTON;
+int first_cycle = 0;
+int prev_activity     = ACT_TREADMILL;
+int boxjump_reps      = 0;
+int boxjump_down_time = BOXJUMP_DOWN_TIME_1;
+
+main {
+    adjusting = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RT_BUTTON) > TRIGGER_THRESHOLD;
+
+    if(adjusting) {
+        if(event_press(XB1_RIGHT)) {
+            activity = activity + 1;
+            if(activity >= ACT_COUNT) { activity = 0; }
+        }
+        if(event_press(XB1_LEFT)) {
+            activity = activity - 1;
+            if(activity < 0) { activity = ACT_COUNT - 1; }
+        }
+
+        // don't let the menu combo leak inputs into the game
+        set_val(LT_BUTTON, 0);
+        set_val(RT_BUTTON, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+    } else {
+        if(event_press(XB1_UP)) {
+            if(activity == ACT_TREADMILL) {
+                running     = 1;
+                cur_btn     = LT_BUTTON;
+                step_delay  = STEP_DELAY_MIN;
+                step_dir    = STEP_DELAY_INCR;
+                first_cycle = 1;
+            }
+            if(activity == ACT_PULLUPS) {
+                if(combo_running(Pullups)) { combo_restart(Pullups); } else { combo_run(Pullups); }
+            }
+            if(activity == ACT_BENCHPRESS) {
+                if(combo_running(Benchpress)) { combo_restart(Benchpress); } else { combo_run(Benchpress); }
+            }
+            if(activity == ACT_SPRINT) {
+                running     = 1;
+                cur_btn     = LT_BUTTON;
+                first_cycle = 1;
+            }
+            if(activity == ACT_BOXJUMPS) {
+                boxjump_reps = boxjump_reps + 1;
+                if(boxjump_reps <= 3) {
+                    boxjump_down_time = BOXJUMP_DOWN_TIME_1;
+                } else {
+                    if(boxjump_reps <= 6) {
+                        boxjump_down_time = BOXJUMP_DOWN_TIME_2;
+                    } else {
+                        if(boxjump_reps <= 9) {
+                            boxjump_down_time = BOXJUMP_DOWN_TIME_3;
+                        } else {
+                            boxjump_down_time = BOXJUMP_DOWN_TIME_4;
+                        }
+                    }
+                }
+                if(combo_running(BoxJumps)) { combo_restart(BoxJumps); } else { combo_run(BoxJumps); }
+            }
+            set_val(XB1_UP, 0);
+        }
+        if(event_press(XB1_DOWN)) {
+            running = 0;
+            set_val(XB1_DOWN, 0);
+        }
+        // any face button ends the sprint
+        if(running && activity == ACT_SPRINT) {
+            if(event_press(XB1_A) || event_press(XB1_B) || event_press(XB1_X) || event_press(XB1_Y)) {
+                running = 0;
+            }
+        }
+    }
+
+    if(activity != prev_activity) {
+        prev_activity     = activity;
+        boxjump_reps      = 0;
+        boxjump_down_time = BOXJUMP_DOWN_TIME_1;
+    }
+
+    if(activity == ACT_PULLUPS)    { running = combo_running(Pullups); }
+    if(activity == ACT_BENCHPRESS) { running = combo_running(Benchpress); }
+    if(activity == ACT_BOXJUMPS)   { running = combo_running(BoxJumps); }
+
+    if(adjusting || activity != ACT_PULLUPS) {
+        if(combo_running(Pullups)) { combo_stop(Pullups); }
+    }
+
+    if(adjusting || activity != ACT_BENCHPRESS) {
+        if(combo_running(Benchpress)) { combo_stop(Benchpress); }
+    }
+
+    if(adjusting || activity != ACT_BOXJUMPS) {
+        if(combo_running(BoxJumps)) { combo_stop(BoxJumps); }
+    }
+
+    if(running && !adjusting) {
+        if(activity == ACT_TREADMILL && !combo_running(Treadmill)) {
+            if(first_cycle) {
+                first_cycle = 0;
+            } else {
+                if(cur_btn == LT_BUTTON) { cur_btn = RT_BUTTON; } else { cur_btn = LT_BUTTON; }
+                step_delay = step_delay + step_dir;
+                if(step_delay > STEP_DELAY_MAX) { step_dir = -STEP_DELAY_INCR; }
+                if(step_delay < STEP_DELAY_MIN) { step_dir = STEP_DELAY_INCR; }
+            }
+            combo_run(Treadmill);
+        }
+        if(activity == ACT_SPRINT && !combo_running(Sprint)) {
+            if(first_cycle) {
+                first_cycle = 0;
+            } else {
+                if(cur_btn == LT_BUTTON) { cur_btn = RT_BUTTON; } else { cur_btn = LT_BUTTON; }
+            }
+            combo_run(Sprint);
+        }
+    } else {
+        if(combo_running(Treadmill)) { combo_stop(Treadmill); }
+        if(combo_running(Sprint))    { combo_stop(Sprint); }
+    }
+
+    cls_oled(OLED_BLACK);
+
+    putc_oled(1, ASCII_UPPER_G);
+    putc_oled(2, ASCII_LOWER_A);
+    putc_oled(3, ASCII_LOWER_T);
+    putc_oled(4, ASCII_LOWER_O);
+    putc_oled(5, ASCII_LOWER_R);
+    putc_oled(6, ASCII_LOWER_A);
+    putc_oled(7, ASCII_LOWER_D);
+    putc_oled(8, ASCII_LOWER_E);
+    puts_oled(2, 2, OLED_FONT_LARGE, 8, OLED_WHITE);
+
+    if(activity == ACT_TREADMILL) {
+        putc_oled(1, ASCII_UPPER_T);
+        putc_oled(2, ASCII_UPPER_R);
+        putc_oled(3, ASCII_UPPER_E);
+        putc_oled(4, ASCII_UPPER_A);
+        putc_oled(5, ASCII_UPPER_D);
+        putc_oled(6, ASCII_UPPER_M);
+        putc_oled(7, ASCII_UPPER_I);
+        putc_oled(8, ASCII_UPPER_L);
+        putc_oled(9, ASCII_UPPER_L);
+        puts_oled(2, 32, OLED_FONT_MEDIUM, 9, OLED_WHITE);
+    }
+
+    if(activity == ACT_PULLUPS) {
+        putc_oled(1, ASCII_UPPER_P);
+        putc_oled(2, ASCII_UPPER_U);
+        putc_oled(3, ASCII_UPPER_L);
+        putc_oled(4, ASCII_UPPER_L);
+        putc_oled(5, ASCII_UPPER_U);
+        putc_oled(6, ASCII_UPPER_P);
+        putc_oled(7, ASCII_UPPER_S);
+        puts_oled(2, 32, OLED_FONT_MEDIUM, 7, OLED_WHITE);
+    }
+
+    if(activity == ACT_BENCHPRESS) {
+        putc_oled(1, ASCII_UPPER_B);
+        putc_oled(2, ASCII_UPPER_E);
+        putc_oled(3, ASCII_UPPER_N);
+        putc_oled(4, ASCII_UPPER_C);
+        putc_oled(5, ASCII_UPPER_H);
+        putc_oled(6, ASCII_UPPER_P);
+        putc_oled(7, ASCII_UPPER_R);
+        putc_oled(8, ASCII_UPPER_E);
+        putc_oled(9, ASCII_UPPER_S);
+        putc_oled(10, ASCII_UPPER_S);
+        puts_oled(2, 32, OLED_FONT_MEDIUM, 10, OLED_WHITE);
+    }
+
+    if(activity == ACT_SPRINT) {
+        putc_oled(1, ASCII_UPPER_S);
+        putc_oled(2, ASCII_UPPER_P);
+        putc_oled(3, ASCII_UPPER_R);
+        putc_oled(4, ASCII_UPPER_I);
+        putc_oled(5, ASCII_UPPER_N);
+        putc_oled(6, ASCII_UPPER_T);
+        puts_oled(2, 32, OLED_FONT_MEDIUM, 6, OLED_WHITE);
+    }
+
+    if(activity == ACT_BOXJUMPS) {
+        putc_oled(1, ASCII_UPPER_B);
+        putc_oled(2, ASCII_UPPER_O);
+        putc_oled(3, ASCII_UPPER_X);
+        putc_oled(4, ASCII_SPACE);
+        putc_oled(5, ASCII_UPPER_J);
+        putc_oled(6, ASCII_UPPER_U);
+        putc_oled(7, ASCII_UPPER_M);
+        putc_oled(8, ASCII_UPPER_P);
+        putc_oled(9, ASCII_UPPER_S);
+        puts_oled(2, 32, OLED_FONT_MEDIUM, 9, OLED_WHITE);
+    }
+
+    if(running) {
+        putc_oled(1, ASCII_UPPER_R);
+        putc_oled(2, ASCII_UPPER_U);
+        putc_oled(3, ASCII_UPPER_N);
+        putc_oled(4, ASCII_UPPER_N);
+        putc_oled(5, ASCII_UPPER_I);
+        putc_oled(6, ASCII_UPPER_N);
+        putc_oled(7, ASCII_UPPER_G);
+        puts_oled(2, 52, OLED_FONT_SMALL, 7, OLED_WHITE);
+    } else {
+        putc_oled(1, ASCII_UPPER_S);
+        putc_oled(2, ASCII_UPPER_T);
+        putc_oled(3, ASCII_UPPER_O);
+        putc_oled(4, ASCII_UPPER_P);
+        putc_oled(5, ASCII_UPPER_P);
+        putc_oled(6, ASCII_UPPER_E);
+        putc_oled(7, ASCII_UPPER_D);
+        puts_oled(2, 52, OLED_FONT_SMALL, 7, OLED_WHITE);
+    }
+}
+
+combo Treadmill {
+    set_val(cur_btn, 100);
+    wait(PRESS_TIME);
+    set_val(cur_btn, 0);
+    wait(step_delay);
+}
+
+combo Sprint {
+    set_val(cur_btn, 100);
+    wait(PRESS_TIME);
+    set_val(cur_btn, 0);
+    wait(SPRINT_DELAY);
+}
+
+combo BoxJumps {
+    set_val(XB1_LY, 100);
+    wait(boxjump_down_time);
+    set_val(XB1_LY, -100);
+    wait(BOXJUMP_UP_TIME);
+    set_val(XB1_LY, 0);
+}
+
+combo Pullups {
+    set_val(XB1_LY, 100);
+    set_val(XB1_RY, 100);
+    wait(PULLUP_DOWN_TIME);
+    set_val(XB1_LY, -100);
+    set_val(XB1_RY, -100);
+    wait(PULLUP_UP_TIME);
+    set_val(XB1_LY, 0);
+    set_val(XB1_RY, 0);
+}
+
+combo Benchpress {
+    set_val(XB1_LY, 100);
+    set_val(XB1_RY, 100);
+    wait(BENCH_DOWN_TIME);
+    set_val(XB1_LY, -100);
+    set_val(XB1_RY, -100);
+    wait(BENCH_UP_TIME);
+    set_val(XB1_LY, 0);
+    set_val(XB1_RY, 0);
+}

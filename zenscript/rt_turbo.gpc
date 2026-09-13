@@ -1,0 +1,39 @@
+// RT clamp - while RT is held AND the left stick is being moved around
+// (not sitting near center), RT is capped at RT_CLAMP instead of going
+// all the way to 100. Every HOLD_TIME the trigger is also fully released
+// for RELEASE_TIME.
+//
+// If the stick goes idle (near center) or you let go of RT, it behaves
+// like a normal trigger again.
+
+define RT_BUTTON = XB1_RT;
+define LX = XB1_LX;
+define LY = XB1_LY;
+
+define RT_THRESHOLD   = 50;  // how far RT must be pulled to count as "held"
+define STICK_DEADZONE = 30;  // stick radius below this counts as idle
+define RT_CLAMP       = 35;  // RT output while clamped
+define HOLD_TIME      = 100; // ms between micro releases
+define RELEASE_TIME   = 100;  // ms the trigger is let go for
+
+int radius = 0;
+int active = 0;
+int timer  = 0;
+
+main {
+    radius = isqrt(get_val(LX) * get_val(LX) + get_val(LY) * get_val(LY));
+    active = get_val(RT_BUTTON) > RT_THRESHOLD && radius > STICK_DEADZONE;
+
+    if(active) {
+        timer = timer + get_rtime();
+        if(timer >= HOLD_TIME + RELEASE_TIME) { timer = 0; }
+
+        if(timer >= HOLD_TIME) {
+            set_val(RT_BUTTON, 0);
+        } else {
+            if(get_val(RT_BUTTON) > RT_CLAMP) { set_val(RT_BUTTON, RT_CLAMP); }
+        }
+    } else {
+        timer = 0;
+    }
+}
