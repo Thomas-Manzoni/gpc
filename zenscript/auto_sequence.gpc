@@ -18,7 +18,7 @@ define OPTION_BUTTON = XB1_MENU;   // "Menu" on Xbox = "Options" on PlayStation
 define DOWN_BUTTON   = XB1_DOWN;
 
 define PRESS_MS   = 60;    // how long a "tap" is held down
-define HOLD_X_MS  = 600;   // <-- set how long to hold X here (ms)
+define HOLD_X_MS  = 620;   // <-- set how long to hold X here (ms)
 
 define A_RETRY_WAIT   = 2000; // wait between A presses while no rumble
 define POST_RUMBLE_WAIT = 1000;
