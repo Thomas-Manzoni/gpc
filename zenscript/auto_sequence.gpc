@@ -1,0 +1,129 @@
+// Cronus Zen / GPC Studio - Xbox
+//
+// Loops forever:
+//   1) Press A, wait 2s. Repeat until a controller rumble is detected.
+//   2) Once rumble hits: wait 1s.
+//   3) Hold X for HOLD_X_MS (tune below).
+//   4) Wait 2s.
+//   5) Press OPTION (Menu button on Xbox pad).
+//   6) Wait 1s.
+//   7) Press DOWN.
+//   8) Wait 1s.
+//   9) Press A.
+//  -> back to step 1.
+
+define A_BUTTON      = XB1_A;
+define X_BUTTON      = XB1_X;
+define OPTION_BUTTON = XB1_MENU;   // "Menu" on Xbox = "Options" on PlayStation
+define DOWN_BUTTON   = XB1_DOWN;
+
+define PRESS_MS   = 60;    // how long a "tap" is held down
+define HOLD_X_MS  = 600;   // <-- set how long to hold X here (ms)
+
+define A_RETRY_WAIT   = 2000; // wait between A presses while no rumble
+define POST_RUMBLE_WAIT = 1000;
+define WAIT_AFTER_X    = 2000;
+define WAIT_AFTER_OPTION = 1000;
+define WAIT_AFTER_DOWN   = 1000;
+
+define RUMBLE_THRESHOLD = 10; // 0-100, tune if false triggers/misses happen
+
+define ST_PRESS_A           = 0;
+define ST_WAIT_A_RETRY      = 1;
+define ST_POST_RUMBLE_WAIT  = 2;
+define ST_HOLD_X            = 3;
+define ST_WAIT_AFTER_X      = 4;
+define ST_PRESS_OPTION      = 5;
+define ST_WAIT_AFTER_OPTION = 6;
+define ST_PRESS_DOWN        = 7;
+define ST_WAIT_AFTER_DOWN   = 8;
+define ST_PRESS_A_FINAL     = 9;
+
+int state = ST_PRESS_A;
+int timer = 0;
+int rumbled = 0;
+
+main {
+    timer = timer + get_rtime();
+
+    if(state == ST_PRESS_A) {
+        set_val(A_BUTTON, 100);
+        if(timer >= PRESS_MS) {
+            set_val(A_BUTTON, 0);
+            timer = 0;
+            rumbled = 0;
+            state = ST_WAIT_A_RETRY;
+        }
+    }
+    else if(state == ST_WAIT_A_RETRY) {
+        // watch for rumble during the whole 2s window
+        if(get_rumble(RUMBLE_A) > RUMBLE_THRESHOLD || get_rumble(RUMBLE_B) > RUMBLE_THRESHOLD) {
+            rumbled = 1;
+        }
+
+        if(timer >= A_RETRY_WAIT) {
+            timer = 0;
+            if(rumbled) {
+                state = ST_POST_RUMBLE_WAIT;
+            } else {
+                state = ST_PRESS_A; // no rumble yet, press A again
+            }
+        }
+    }
+    else if(state == ST_POST_RUMBLE_WAIT) {
+        if(timer >= POST_RUMBLE_WAIT) {
+            timer = 0;
+            state = ST_HOLD_X;
+        }
+    }
+    else if(state == ST_HOLD_X) {
+        set_val(X_BUTTON, 100);
+        if(timer >= HOLD_X_MS) {
+            set_val(X_BUTTON, 0);
+            timer = 0;
+            state = ST_WAIT_AFTER_X;
+        }
+    }
+    else if(state == ST_WAIT_AFTER_X) {
+        if(timer >= WAIT_AFTER_X) {
+            timer = 0;
+            state = ST_PRESS_OPTION;
+        }
+    }
+    else if(state == ST_PRESS_OPTION) {
+        set_val(OPTION_BUTTON, 100);
+        if(timer >= PRESS_MS) {
+            set_val(OPTION_BUTTON, 0);
+            timer = 0;
+            state = ST_WAIT_AFTER_OPTION;
+        }
+    }
+    else if(state == ST_WAIT_AFTER_OPTION) {
+        if(timer >= WAIT_AFTER_OPTION) {
+            timer = 0;
+            state = ST_PRESS_DOWN;
+        }
+    }
+    else if(state == ST_PRESS_DOWN) {
+        set_val(DOWN_BUTTON, 100);
+        if(timer >= PRESS_MS) {
+            set_val(DOWN_BUTTON, 0);
+            timer = 0;
+            state = ST_WAIT_AFTER_DOWN;
+        }
+    }
+    else if(state == ST_WAIT_AFTER_DOWN) {
+        if(timer >= WAIT_AFTER_DOWN) {
+            timer = 0;
+            state = ST_PRESS_A_FINAL;
+        }
+    }
+    else if(state == ST_PRESS_A_FINAL) {
+        set_val(A_BUTTON, 100);
+        if(timer >= PRESS_MS) {
+            set_val(A_BUTTON, 0);
+            timer = 0;
+            state = ST_PRESS_A; // loop back to the start
+        }
+    }
+}
