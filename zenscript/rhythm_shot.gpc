@@ -12,19 +12,30 @@
 //   RISE  - "speed" of the pull up: ms it takes the stick to travel
 //           from full down to full up. Smaller = faster flick.
 //
-// Total motion length is TOTAL + RISE.
+// Total motion length is TOTAL + RISE + UP_HOLD_TIME.
 //
 // Live tuning (works any time, even mid-game):
 //   LT + RT + D-Pad LEFT / RIGHT -> TOTAL -1 / +1
 //   LT + RT + D-Pad DOWN / UP    -> RISE  -1 / +1
 // Changes are written to persistent memory automatically a moment
 // after you stop adjusting.
+//
+// Dribble move: press X, B, Y or P2 (right paddle 2). Everything else is
+// released, LS goes full DOWN for DRIBBLE_DOWN_TIME while RS goes toward
+// whichever side LS was leaning (right or left) for DRIBBLE_RS_TIME.
 
 define TRIGGER   = XB1_RS; // right stick click
 define RX        = XB1_RX;
 define RY        = XB1_RY;
+define LX        = XB1_LX;
+define LY        = XB1_LY;
 define LT_BUTTON = XB1_LT;
 define RT_BUTTON = XB1_RT;
+
+define DRIBBLE_BTN_X  = XB1_X;
+define DRIBBLE_BTN_B  = XB1_B;
+define DRIBBLE_BTN_Y  = XB1_Y;
+define DRIBBLE_BTN_P2 = XB1_PR2; // right paddle 2
 
 define TRIGGER_THRESHOLD = 50; // LT/RT are analog, 0-100
 
@@ -37,7 +48,7 @@ define TOTAL_TIME_DEFAULT = 600;
 
 define RISE_TIME_MIN     = 5;   // keeps the ramp maths inside 16-bit
 define RISE_TIME_MAX     = 300;
-define RISE_TIME_DEFAULT = 140;
+define RISE_TIME_DEFAULT = 100;
 
 define SAVE_DELAY = 400; // ms of no changes before writing to flash
 
@@ -45,9 +56,19 @@ define SAVE_DELAY = 400; // ms of no changes before writing to flash
 define STICK_DOWN = 100;
 define STICK_UP   = -100;
 
+// Stick X: +100 = right, -100 = left
+define STICK_RIGHT = 100;
+define STICK_LEFT  = -100;
+
+define DRIBBLE_DOWN_TIME = 300; // ms LS is held full down
+define DRIBBLE_RS_TIME   = 100; // ms RS is held to the side
+
 define IDLE = 0;
 define HOLD_DOWN = 1;
 define PULL_UP = 2;
+define HOLD_UP = 3;
+
+define UP_HOLD_TIME = 100; // ms the stick stays at full up before release
 
 int profile = SHOT_STATIC;
 int TOTAL_TIME;
@@ -60,6 +81,9 @@ int value = 0;
 int adjusting = 0;
 int dirty = 0;
 int save_timer = 0;
+int dribble_active = 0;
+int dribble_timer = 0;
+int dribble_dir = 0;
 int saved_timer = 0;
 int digits = 0;
 
@@ -123,11 +147,36 @@ main {
     // when the state is true check the conditions to when start the shot (probably some iterations will wait some ms
     // before starting the shot)
     if(state == IDLE) {
-        if(!adjusting && event_press(TRIGGER)) {
+        if(!adjusting && !dribble_active && event_press(TRIGGER)) {
             rise      = RISE_TIME;
             hold_time = TOTAL_TIME;
             timer     = 0;
             state     = HOLD_DOWN;
+        }
+    }
+
+    if(!adjusting && !dribble_active && state == IDLE) {
+        if(event_press(DRIBBLE_BTN_X) || event_press(DRIBBLE_BTN_B) || event_press(DRIBBLE_BTN_Y) || event_press(DRIBBLE_BTN_P2)) {
+            if(get_val(LX) >= 0) { dribble_dir = STICK_RIGHT; } else { dribble_dir = STICK_LEFT; }
+            dribble_timer  = 0;
+            dribble_active = 1;
+        }
+    }
+
+    if(dribble_active) {
+        // release everything else; only the sticks move for the dribble
+        set_val(DRIBBLE_BTN_X, 0);
+        set_val(DRIBBLE_BTN_B, 0);
+        set_val(DRIBBLE_BTN_Y, 0);
+        set_val(DRIBBLE_BTN_P2, 0);
+        set_val(LX, 0);
+        set_val(LY, STICK_DOWN);
+        if(dribble_timer < DRIBBLE_RS_TIME) { set_val(RX, dribble_dir); } else { set_val(RX, 0); }
+        set_val(RY, 0);
+
+        dribble_timer = dribble_timer + get_rtime();
+        if(dribble_timer >= DRIBBLE_DOWN_TIME) {
+            dribble_active = 0;
         }
     }
 
@@ -142,16 +191,22 @@ main {
                 timer = 0;
                 state = PULL_UP;
             }
-        } else {
+        } else if(state == PULL_UP) {
             if(timer >= rise) {
                 set_val(RY, STICK_UP);
-                state = IDLE;
                 timer = 0;
+                state = HOLD_UP;
             } else {
                 // linear ramp from +100 (down) to -100 (up)
                 // split as *100 then *2 to stay inside 16-bit maths
                 value = STICK_DOWN - (((timer * 100) / rise) * 2);
                 set_val(RY, value);
+            }
+        } else {
+            set_val(RY, STICK_UP);
+            if(timer >= UP_HOLD_TIME) {
+                timer = 0;
+                state = IDLE;
             }
         }
     }

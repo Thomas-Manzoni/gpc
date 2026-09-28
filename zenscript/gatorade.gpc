@@ -4,6 +4,9 @@
 //               TREADMILL: alternating LT / RT, always starting with LT
 //               PULLUPS / BENCHPRESS: one rep per press
 //               SPRINT: alternating LT / RT until you press A, B, X or Y
+//               BIKE: alternating RS up / LS down; press again to cycle to
+//               RS left / LS right, then to both sticks rotating together
+//               clockwise, then back (the diagonal phase is on hold, unused)
 // D-Pad DOWN -> stop it
 // LT + RT + D-Pad LEFT / RIGHT -> switch activity
 //
@@ -39,7 +42,8 @@ define ACT_PULLUPS    = 1;
 define ACT_BENCHPRESS = 2;
 define ACT_SPRINT     = 3;
 define ACT_BOXJUMPS   = 4;
-define ACT_COUNT      = 5;
+define ACT_BIKE       = 5;
+define ACT_COUNT      = 6;
 
 define SPRINT_DELAY = 60; // ms between the alternating LT / RT presses
 
@@ -55,6 +59,16 @@ define BOXJUMP_DOWN_TIME_3 = 500; // ms, reps 7-9
 define BOXJUMP_DOWN_TIME_4 = 440; // ms, reps 10+
 define BOXJUMP_UP_TIME     = 300; // ms left stick is held up
 
+define BIKE_HOLD_TIME = 65; // ms each stick position is held before flipping (pedaling speed)
+
+define BIKE_PHASE_VERTICAL   = 0; // RS up / LS down, alternating
+define BIKE_PHASE_HORIZONTAL = 1; // RS left / LS right, alternating
+define BIKE_PHASE_DIAGONAL   = 2; // LS up-left / RS down-right, alternating - on hold, skipped
+define BIKE_PHASE_CIRCLE     = 3; // both sticks rotating together, clockwise
+define BIKE_PHASE_COUNT      = 4; // cycled through via D-pad UP
+
+define BIKE_CIRCLE_STEPS = 8; // points sampled around the circle
+
 int activity    = ACT_TREADMILL;
 int adjusting   = 0;
 int running     = 0;
@@ -65,6 +79,12 @@ int first_cycle = 0;
 int prev_activity     = ACT_TREADMILL;
 int boxjump_reps      = 0;
 int boxjump_down_time = BOXJUMP_DOWN_TIME_1;
+int bike_phase       = BIKE_PHASE_VERTICAL;
+int bike_rx_val      = 0;
+int bike_ry_val      = 100;
+int bike_lx_val      = 0;
+int bike_ly_val      = -100;
+int bike_circle_step = 0;
 
 main {
     adjusting = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RT_BUTTON) > TRIGGER_THRESHOLD;
@@ -123,6 +143,39 @@ main {
                 }
                 if(combo_running(BoxJumps)) { combo_restart(BoxJumps); } else { combo_run(BoxJumps); }
             }
+            if(activity == ACT_BIKE) {
+                if(running) {
+                    // clear the current pattern's sticks before switching
+                    set_val(XB1_RX, 0);
+                    set_val(XB1_RY, 0);
+                    set_val(XB1_LX, 0);
+                    set_val(XB1_LY, 0);
+                    bike_phase = bike_phase + 1;
+                    if(bike_phase == BIKE_PHASE_DIAGONAL) { bike_phase = bike_phase + 1; } // on hold, skip it
+                    if(bike_phase >= BIKE_PHASE_COUNT) { bike_phase = BIKE_PHASE_VERTICAL; }
+                } else {
+                    bike_phase = BIKE_PHASE_VERTICAL;
+                    running    = 1;
+                }
+                if(bike_phase == BIKE_PHASE_VERTICAL) {
+                    bike_rx_val = 0;    bike_ry_val = 100;  // RS up
+                    bike_lx_val = 0;    bike_ly_val = -100; // LS down
+                }
+                if(bike_phase == BIKE_PHASE_HORIZONTAL) {
+                    bike_rx_val = -100; bike_ry_val = 0;    // RS left
+                    bike_lx_val = 100;  bike_ly_val = 0;    // LS right
+                }
+                if(bike_phase == BIKE_PHASE_DIAGONAL) {
+                    bike_lx_val = -100; bike_ly_val = 100;  // LS up-left
+                    bike_rx_val = 100;  bike_ry_val = -100; // RS down-right
+                }
+                if(bike_phase == BIKE_PHASE_CIRCLE) {
+                    bike_circle_step = 0;
+                    bike_rx_val = 0; bike_ry_val = 100; // both sticks start pointing up
+                    bike_lx_val = 0; bike_ly_val = 100;
+                }
+                first_cycle = 1;
+            }
             set_val(XB1_UP, 0);
         }
         if(event_press(XB1_DOWN)) {
@@ -179,9 +232,47 @@ main {
             }
             combo_run(Sprint);
         }
+        if(activity == ACT_BIKE && !combo_running(Bike)) {
+            if(bike_phase == BIKE_PHASE_CIRCLE) {
+                if(first_cycle) {
+                    first_cycle = 0;
+                } else {
+                    bike_circle_step = bike_circle_step + 1;
+                    if(bike_circle_step >= BIKE_CIRCLE_STEPS) { bike_circle_step = 0; }
+                }
+                // 8 points sampled clockwise around the circle, starting at up
+                if(bike_circle_step == 0) { bike_rx_val = 0;    bike_ry_val = 100;  }
+                if(bike_circle_step == 1) { bike_rx_val = 70;   bike_ry_val = 70;   }
+                if(bike_circle_step == 2) { bike_rx_val = 100;  bike_ry_val = 0;    }
+                if(bike_circle_step == 3) { bike_rx_val = 70;   bike_ry_val = -70;  }
+                if(bike_circle_step == 4) { bike_rx_val = 0;    bike_ry_val = -100; }
+                if(bike_circle_step == 5) { bike_rx_val = -70;  bike_ry_val = -70;  }
+                if(bike_circle_step == 6) { bike_rx_val = -100; bike_ry_val = 0;    }
+                if(bike_circle_step == 7) { bike_rx_val = -70;  bike_ry_val = 70;   }
+                bike_lx_val = bike_rx_val;
+                bike_ly_val = bike_ry_val;
+            } else {
+                if(first_cycle) {
+                    first_cycle = 0;
+                } else {
+                    bike_rx_val = -bike_rx_val;
+                    bike_ry_val = -bike_ry_val;
+                    bike_lx_val = -bike_lx_val;
+                    bike_ly_val = -bike_ly_val;
+                }
+            }
+            combo_run(Bike);
+        }
     } else {
         if(combo_running(Treadmill)) { combo_stop(Treadmill); }
         if(combo_running(Sprint))    { combo_stop(Sprint); }
+        if(combo_running(Bike)) {
+            combo_stop(Bike);
+            set_val(XB1_LX, 0);
+            set_val(XB1_LY, 0);
+            set_val(XB1_RX, 0);
+            set_val(XB1_RY, 0);
+        }
     }
 
     cls_oled(OLED_BLACK);
@@ -257,6 +348,14 @@ main {
         puts_oled(2, 32, OLED_FONT_MEDIUM, 9, OLED_WHITE);
     }
 
+    if(activity == ACT_BIKE) {
+        putc_oled(1, ASCII_UPPER_B);
+        putc_oled(2, ASCII_UPPER_I);
+        putc_oled(3, ASCII_UPPER_K);
+        putc_oled(4, ASCII_UPPER_E);
+        puts_oled(2, 32, OLED_FONT_MEDIUM, 4, OLED_WHITE);
+    }
+
     if(running) {
         putc_oled(1, ASCII_UPPER_R);
         putc_oled(2, ASCII_UPPER_U);
@@ -298,6 +397,14 @@ combo BoxJumps {
     set_val(XB1_LY, -100);
     wait(BOXJUMP_UP_TIME);
     set_val(XB1_LY, 0);
+}
+
+combo Bike {
+    set_val(XB1_RX, bike_rx_val);
+    set_val(XB1_RY, bike_ry_val);
+    set_val(XB1_LX, bike_lx_val);
+    set_val(XB1_LY, bike_ly_val);
+    wait(BIKE_HOLD_TIME);
 }
 
 combo Pullups {

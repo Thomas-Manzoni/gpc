@@ -1,0 +1,413 @@
+// NBA 2K27 - Rhythm Shooting w/ Rumble Sync (Xbox)
+// Cronus Zen / GPC Studio
+//
+// Rhythm shooting = pull the RIGHT STICK DOWN, hold, then flick it
+// quickly UP. This script does the whole motion for you.
+//
+// Trigger: press XB1_PR2 (right paddle 2).
+//
+// Four parameters, all live-tunable and auto-saved (persistent vars,
+// suffixed _MP below):
+//   TOTAL_TIME_MP      - ms from the moment the stick goes DOWN until
+//                         the lift UP starts (your rhythm timing).
+//   RISE_TIME_MP        - "speed" of the pull up: ms it takes the stick
+//                         to travel from full down to full up. Smaller
+//                         = faster flick.
+//   RUMBLE_WINDOW_MP    - when you press the trigger, if a rumble (from
+//                         either motor) happened within this many ms
+//                         BEFORE the press, the shot fires immediately.
+//   RUMBLE_MAXWAIT_MP   - otherwise the trigger is "armed" and waits for
+//                         the NEXT rumble to fire the shot in sync. If
+//                         no rumble shows up within this many ms, the
+//                         shot fires anyway so it never just hangs.
+//
+// Total motion length (once fired) is TOTAL_TIME_MP + RISE_TIME_MP +
+// UP_HOLD_TIME.
+//
+// A background counter tracks ms elapsed since the last rumble pulse
+// from either motor (RUMBLE_A or RUMBLE_B), regardless of what else is
+// going on. That counter is what RUMBLE_WINDOW_MP / RUMBLE_MAXWAIT_MP
+// are checked against.
+//
+// NOTE: this relies on the game/console actually driving controller
+// rumble on the events you want to sync to, and on controller
+// vibration being enabled in-game.
+//
+// Live tuning (works any time, even mid-game):
+//   LT + RT + D-Pad LEFT / RIGHT -> TOTAL_TIME_MP      -1 / +1
+//   LT + RT + D-Pad DOWN / UP    -> RISE_TIME_MP        -1 / +1
+//   LB + RB + D-Pad LEFT / RIGHT -> RUMBLE_WINDOW_MP    -1 / +1
+//   LB + RB + D-Pad DOWN / UP    -> RUMBLE_MAXWAIT_MP   -1 / +1
+//   LT + RB + D-Pad LEFT / RIGHT -> LATENCY VALUE       -1 / +1
+//   LT + RB + D-Pad DOWN / UP    -> LATENCY TOGGLE      OFF / ON
+//
+// Changes are written to persistent memory automatically a moment
+// after you stop adjusting (except Latency which resets on script reload).
+
+define TRIGGER   = XB1_PR2; // right paddle 2
+define RX        = XB1_RX;
+define RY        = XB1_RY;
+define LT_BUTTON = XB1_LT;
+define RT_BUTTON = XB1_RT;
+define LB_BUTTON = XB1_LB;
+define RB_BUTTON = XB1_RB;
+
+define TRIGGER_THRESHOLD = 50; // LT/RT are analog, 0-100
+
+// One profile for now; more shot types will be added here later.
+define SHOT_STATIC = 0;
+
+define TOTAL_TIME_MIN     = 100;
+define TOTAL_TIME_MAX     = 2000;
+define TOTAL_TIME_DEFAULT = 555;
+
+define RISE_TIME_MIN     = 5;   // keeps the ramp maths inside 16-bit
+define RISE_TIME_MAX     = 300;
+define RISE_TIME_DEFAULT = 75;
+
+define RUMBLE_WINDOW_MIN     = 0;
+define RUMBLE_WINDOW_MAX     = 500;
+define RUMBLE_WINDOW_DEFAULT = 50;
+
+define RUMBLE_MAXWAIT_MIN     = 50;
+define RUMBLE_MAXWAIT_MAX     = 1000;
+define RUMBLE_MAXWAIT_DEFAULT = 750;
+
+define RUMBLE_TIME_CAP       = 5000; // cap the background counter, avoid overflow
+define RUMBLE_DETECT_THRESHOLD = 1;  // any motor value >= this counts as "rumbling"
+
+define SAVE_DELAY = 400; // ms of no changes before writing to flash
+
+// Right stick Y: +100 = down, -100 = up
+define STICK_DOWN = 100;
+define STICK_UP   = -100;
+
+define IDLE        = 0;
+define WAIT_RUMBLE = 1;
+define HOLD_DOWN   = 2;
+define PULL_UP     = 3;
+define HOLD_UP     = 4;
+
+define UP_HOLD_TIME = 100; // ms the stick stays at full up before release
+
+int profile = SHOT_STATIC;
+int TOTAL_TIME_MP;
+int RISE_TIME_MP;
+int RUMBLE_WINDOW_MP;
+int RUMBLE_MAXWAIT_MP;
+int state = IDLE;
+int timer = 0;
+int hold_time = 0;
+int rise = 0;
+int value = 0;
+int adjusting_timing = 0;
+int adjusting_rumble_cfg = 0;
+int adjusting_latency = 0; // Latency adjusting flag
+int dirty = 0;
+int save_timer = 0;
+int saved_timer = 0;
+int digits = 0;
+int rumble_now = 0;
+int time_since_rumble = RUMBLE_TIME_CAP; // start "stale" so nothing fires early
+int wait_timer = 0;
+
+// Latency variables
+int latency_val = 80;
+int latency_on = 0; // 0 = off, 1 = on
+
+function print_num(num, x, y) {
+    digits = 0;
+    if(num >= 1000) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + ((num / 1000) % 10));
+    }
+    if(num >= 100) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + ((num / 100) % 10));
+    }
+    if(num >= 10) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + ((num / 10) % 10));
+    }
+    digits = digits + 1;
+    putc_oled(digits, ASCII_DIGIT0 + (num % 10));
+    puts_oled(x, y, OLED_FONT_MEDIUM, digits, OLED_WHITE);
+}
+
+init {
+    TOTAL_TIME_MP    = get_pvar(SPVAR_2, TOTAL_TIME_MIN,    TOTAL_TIME_MAX,    TOTAL_TIME_DEFAULT);
+    RISE_TIME_MP     = get_pvar(SPVAR_3, RISE_TIME_MIN,     RISE_TIME_MAX,     RISE_TIME_DEFAULT);
+    RUMBLE_WINDOW_MP  = get_pvar(SPVAR_4, RUMBLE_WINDOW_MIN,  RUMBLE_WINDOW_MAX,  RUMBLE_WINDOW_DEFAULT);
+    RUMBLE_MAXWAIT_MP = get_pvar(SPVAR_5, RUMBLE_MAXWAIT_MIN, RUMBLE_MAXWAIT_MAX, RUMBLE_MAXWAIT_DEFAULT);
+}
+
+main {
+    // ---- background rumble tracking (always runs) ----
+    rumble_now = get_rumble(RUMBLE_A) >= RUMBLE_DETECT_THRESHOLD || get_rumble(RUMBLE_B) >= RUMBLE_DETECT_THRESHOLD;
+    if(rumble_now) {
+        time_since_rumble = 0;
+    } else if(time_since_rumble < RUMBLE_TIME_CAP) {
+        time_since_rumble = time_since_rumble + get_rtime();
+    }
+
+    // ---- live tuning: rhythm timing (LT+RT) ----
+    adjusting_timing = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RT_BUTTON) > TRIGGER_THRESHOLD;
+
+    if(adjusting_timing) {
+        if(event_press(XB1_RIGHT) && TOTAL_TIME_MP < TOTAL_TIME_MAX) {
+            TOTAL_TIME_MP = TOTAL_TIME_MP + 1;
+            dirty         = 1;
+            save_timer    = SAVE_DELAY;
+        }
+        if(event_press(XB1_LEFT) && TOTAL_TIME_MP > TOTAL_TIME_MIN) {
+            TOTAL_TIME_MP = TOTAL_TIME_MP - 1;
+            dirty         = 1;
+            save_timer    = SAVE_DELAY;
+        }
+        if(event_press(XB1_UP) && RISE_TIME_MP < RISE_TIME_MAX) {
+            RISE_TIME_MP = RISE_TIME_MP + 1;
+            dirty        = 1;
+            save_timer   = SAVE_DELAY;
+        }
+        if(event_press(XB1_DOWN) && RISE_TIME_MP > RISE_TIME_MIN) {
+            RISE_TIME_MP = RISE_TIME_MP - 1;
+            dirty        = 1;
+            save_timer   = SAVE_DELAY;
+        }
+
+        // don't let the tuning combo leak inputs into the game
+        set_val(LT_BUTTON, 0);
+        set_val(RT_BUTTON, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+    }
+
+    // ---- live tuning: rumble-sync window / max wait (LB+RB) ----
+    adjusting_rumble_cfg = get_val(LB_BUTTON) > 0 && get_val(RB_BUTTON) > 0;
+
+    if(adjusting_rumble_cfg) {
+        if(event_press(XB1_RIGHT) && RUMBLE_WINDOW_MP < RUMBLE_WINDOW_MAX) {
+            RUMBLE_WINDOW_MP = RUMBLE_WINDOW_MP + 1;
+            dirty            = 1;
+            save_timer       = SAVE_DELAY;
+        }
+        if(event_press(XB1_LEFT) && RUMBLE_WINDOW_MP > RUMBLE_WINDOW_MIN) {
+            RUMBLE_WINDOW_MP = RUMBLE_WINDOW_MP - 1;
+            dirty            = 1;
+            save_timer       = SAVE_DELAY;
+        }
+        if(event_press(XB1_UP) && RUMBLE_MAXWAIT_MP < RUMBLE_MAXWAIT_MAX) {
+            RUMBLE_MAXWAIT_MP = RUMBLE_MAXWAIT_MP + 1;
+            dirty             = 1;
+            save_timer        = SAVE_DELAY;
+        }
+        if(event_press(XB1_DOWN) && RUMBLE_MAXWAIT_MP > RUMBLE_MAXWAIT_MIN) {
+            RUMBLE_MAXWAIT_MP = RUMBLE_MAXWAIT_MP - 1;
+            dirty             = 1;
+            save_timer        = SAVE_DELAY;
+        }
+
+        // don't let the tuning combo leak inputs into the game
+        set_val(LB_BUTTON, 0);
+        set_val(RB_BUTTON, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+    }
+
+    // ---- live tuning: latency config (LT+RB) ----
+    adjusting_latency = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RB_BUTTON) > 0;
+
+    if(adjusting_latency) {
+        if(event_press(XB1_RIGHT)) {
+            latency_val = latency_val + 1;
+        }
+        if(event_press(XB1_LEFT)) {
+            if(latency_val > 0) { latency_val = latency_val - 1; }
+        }
+        if(event_press(XB1_UP)) {
+            latency_on = 1; // Turn Latency ON
+        }
+        if(event_press(XB1_DOWN)) {
+            latency_on = 0; // Turn Latency OFF
+        }
+
+        // don't let the tuning combo leak inputs into the game
+        set_val(LT_BUTTON, 0);
+        set_val(RB_BUTTON, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+    }
+
+    // debounced write so holding a direction doesn't hammer the flash
+    if(dirty) {
+        save_timer = save_timer - get_rtime();
+        if(save_timer <= 0) {
+            set_pvar(SPVAR_2, TOTAL_TIME_MP);
+            set_pvar(SPVAR_3, RISE_TIME_MP);
+            set_pvar(SPVAR_4, RUMBLE_WINDOW_MP);
+            set_pvar(SPVAR_5, RUMBLE_MAXWAIT_MP);
+            dirty       = 0;
+            saved_timer = 800;
+        }
+    }
+
+    if(saved_timer > 0) {
+        saved_timer = saved_timer - get_rtime();
+        if(saved_timer < 0) { saved_timer = 0; }
+    }
+
+    // ---- shot trigger / rumble-sync arming ----
+    if(state == IDLE) {
+        if(!adjusting_timing && !adjusting_rumble_cfg && !adjusting_latency && event_press(TRIGGER)) {
+            if(time_since_rumble <= RUMBLE_WINDOW_MP) {
+                // a rumble just happened recently enough -> fire now
+                rise      = RISE_TIME_MP;
+                hold_time = TOTAL_TIME_MP;
+                if(latency_on) { hold_time = hold_time + latency_val; }
+                timer     = 0;
+                state     = HOLD_DOWN;
+            } else {
+                // arm and wait for the next rumble (or the timeout)
+                wait_timer = 0;
+                state      = WAIT_RUMBLE;
+            }
+        }
+    } else if(state == WAIT_RUMBLE) {
+        wait_timer = wait_timer + get_rtime();
+        if(rumble_now || wait_timer >= RUMBLE_MAXWAIT_MP) {
+            rise      = RISE_TIME_MP;
+            hold_time = TOTAL_TIME_MP;
+            if(latency_on) { hold_time = hold_time + latency_val; }
+            timer     = 0;
+            state     = HOLD_DOWN;
+        }
+    }
+
+    if(state != IDLE) {
+        set_val(TRIGGER, 0); // don't send the paddle press to the game
+    }
+
+    if(state == HOLD_DOWN || state == PULL_UP || state == HOLD_UP) {
+        set_val(RX, 0); // keep the shot straight
+        timer = timer + get_rtime();
+
+        if(state == HOLD_DOWN) {
+            set_val(RY, STICK_DOWN);
+            if(timer >= hold_time) {
+                timer = 0;
+                state = PULL_UP;
+            }
+        } else if(state == PULL_UP) {
+            if(timer >= rise) {
+                set_val(RY, STICK_UP);
+                timer = 0;
+                state = HOLD_UP;
+            } else {
+                // linear ramp from +100 (down) to -100 (up)
+                // split as *100 then *2 to stay inside 16-bit maths
+                value = STICK_DOWN - (((timer * 100) / rise) * 2);
+                set_val(RY, value);
+            }
+        } else {
+            set_val(RY, STICK_UP);
+            if(timer >= UP_HOLD_TIME) {
+                timer = 0;
+                state = IDLE;
+            }
+        }
+    }
+
+    cls_oled(OLED_BLACK);
+
+    if(profile == SHOT_STATIC) {
+        putc_oled(1, ASCII_UPPER_M);
+        putc_oled(2, ASCII_UPPER_P);
+        putc_oled(7, ASCII_SPACE);
+        putc_oled(8, ASCII_UPPER_S);
+        putc_oled(9, ASCII_UPPER_H);
+        putc_oled(10, ASCII_UPPER_O);
+        putc_oled(11, ASCII_UPPER_T);
+        puts_oled(2, 0, OLED_FONT_MEDIUM, 11, OLED_WHITE);
+    }
+
+    if(adjusting_latency) {
+        // showing latency settings while LT+RB is held
+        putc_oled(1, ASCII_UPPER_L);
+        putc_oled(2, ASCII_UPPER_A);
+        putc_oled(3, ASCII_UPPER_T);
+        puts_oled(2, 22, OLED_FONT_SMALL, 3, OLED_WHITE);
+
+        putc_oled(1, ASCII_UPPER_S);
+        putc_oled(2, ASCII_UPPER_T);
+        putc_oled(3, ASCII_UPPER_A);
+        putc_oled(4, ASCII_UPPER_T);
+        puts_oled(76, 22, OLED_FONT_SMALL, 4, OLED_WHITE);
+
+        print_num(latency_val, 2, 34);
+
+        if(latency_on) {
+            putc_oled(1, ASCII_UPPER_O);
+            putc_oled(2, ASCII_UPPER_N);
+            puts_oled(76, 34, OLED_FONT_MEDIUM, 2, OLED_WHITE);
+        } else {
+            putc_oled(1, ASCII_UPPER_O);
+            putc_oled(2, ASCII_UPPER_F);
+            putc_oled(3, ASCII_UPPER_F);
+            puts_oled(76, 34, OLED_FONT_MEDIUM, 3, OLED_WHITE);
+        }
+    } else if(adjusting_rumble_cfg) {
+        // showing rumble-sync settings while LB+RB is held
+        putc_oled(1, ASCII_UPPER_W);
+        putc_oled(2, ASCII_UPPER_I);
+        putc_oled(3, ASCII_UPPER_N);
+        puts_oled(2, 22, OLED_FONT_SMALL, 3, OLED_WHITE);
+
+        putc_oled(1, ASCII_UPPER_M);
+        putc_oled(2, ASCII_UPPER_A);
+        putc_oled(3, ASCII_UPPER_X);
+        puts_oled(76, 22, OLED_FONT_SMALL, 3, OLED_WHITE);
+
+        print_num(RUMBLE_WINDOW_MP, 2, 34);
+        print_num(RUMBLE_MAXWAIT_MP, 76, 34);
+    } else {
+        // default: rhythm timing settings
+        putc_oled(1, ASCII_UPPER_T);
+        putc_oled(2, ASCII_UPPER_O);
+        putc_oled(3, ASCII_UPPER_T);
+        putc_oled(4, ASCII_UPPER_A);
+        putc_oled(5, ASCII_UPPER_L);
+        puts_oled(2, 22, OLED_FONT_SMALL, 5, OLED_WHITE);
+
+        putc_oled(1, ASCII_UPPER_R);
+        putc_oled(2, ASCII_UPPER_I);
+        putc_oled(3, ASCII_UPPER_S);
+        putc_oled(4, ASCII_UPPER_E);
+        puts_oled(76, 22, OLED_FONT_SMALL, 4, OLED_WHITE);
+
+        print_num(TOTAL_TIME_MP, 2, 34);
+        print_num(RISE_TIME_MP, 76, 34);
+    }
+
+    if(state == WAIT_RUMBLE) {
+        putc_oled(1, ASCII_UPPER_S);
+        putc_oled(2, ASCII_UPPER_Y);
+        putc_oled(3, ASCII_UPPER_N);
+        putc_oled(4, ASCII_UPPER_C);
+        puts_oled(90, 54, OLED_FONT_SMALL, 4, OLED_WHITE);
+    }
+
+    if(saved_timer > 0) {
+        putc_oled(1, ASCII_UPPER_S);
+        putc_oled(2, ASCII_UPPER_A);
+        putc_oled(3, ASCII_UPPER_V);
+        putc_oled(4, ASCII_UPPER_E);
+        putc_oled(5, ASCII_UPPER_D);
+        puts_oled(2, 54, OLED_FONT_SMALL, 5, OLED_WHITE);
+    }
+}
