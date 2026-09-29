@@ -5,10 +5,19 @@
 // quickly UP. This script does the whole motion for you.
 //
 // Triggers:
-//   XB1_PR2 (right paddle 2) -> rumble-synced shot, uses TOTAL_TIME_MP
-//                               (shown as DRIBBLE on the OLED)
+//   XB1_PR2 (right paddle 2) -> shot, uses TOTAL_TIME_MP (shown as
+//                               DRIBBLE on the OLED). Which timing rule
+//                               applies depends on the situation:
+//       1) SNATCH BACK: if a snatch back (RT held + RS pushed down,
+//          RY > SNATCH_RY) was first detected less than SNATCH_SHOT_DELAY
+//          (600 ms) before the press, the shot waits and fires exactly
+//          600 ms after the snatch was FIRST detected. No rumble logic.
+//          (Not configurable on the OLED, edit the defines below.)
+//       2) Otherwise, RUMBLE SYNC: fires immediately if a rumble
+//          happened within RUMBLE_WINDOW_MP ms before the press, else
+//          waits for the next rumble (max RUMBLE_MAXWAIT_MP ms).
 //   XB1_PL2 (left paddle 2)  -> catch shot, uses CATCH_TIME_MP. Fires
-//                               immediately, no rumble logic at all.
+//                               immediately, no rumble or snatch logic.
 //
 // Parameters, all live-tunable and auto-saved (persistent vars,
 // suffixed _MP below):
@@ -25,9 +34,6 @@
 //                         the NEXT rumble to fire the shot in sync. If
 //                         no rumble shows up within this many ms, the
 //                         shot fires anyway so it never just hangs.
-//
-// Latency (not persistent, ON by default at 80 ms): when ON, latency_val
-// ms are added to the hold-down time of BOTH shots (PR2 and PL2).
 //
 // Total motion length (once fired) is hold time [+ latency] + RISE_TIME_MP
 // + UP_HOLD_TIME.
@@ -53,7 +59,7 @@
 // Changes are written to persistent memory automatically a moment
 // after you stop adjusting (except Latency which resets on script reload).
 
-define TRIGGER   = XB1_PR2; // right paddle 2 (rumble-synced shot)
+define TRIGGER   = XB1_PR2; // right paddle 2 (main shot)
 define CATCH_BTN = XB1_PL2; // left paddle 2 (catch shot)
 define RX        = XB1_RX;
 define RY        = XB1_RY;
@@ -73,7 +79,7 @@ define TOTAL_TIME_DEFAULT = 555;
 
 define CATCH_TIME_MIN     = 100;
 define CATCH_TIME_MAX     = 2000;
-define CATCH_TIME_DEFAULT = 535;
+define CATCH_TIME_DEFAULT = 523;
 
 define RISE_TIME_MIN     = 5;   // keeps the ramp maths inside 16-bit
 define RISE_TIME_MAX     = 300;
@@ -87,7 +93,7 @@ define RUMBLE_MAXWAIT_MIN     = 50;
 define RUMBLE_MAXWAIT_MAX     = 1000;
 define RUMBLE_MAXWAIT_DEFAULT = 750;
 
-define RUMBLE_TIME_CAP       = 5000; // cap the background counter, avoid overflow
+define RUMBLE_TIME_CAP       = 5000; // cap the background counters, avoid overflow
 define RUMBLE_DETECT_THRESHOLD = 1;  // any motor value >= this counts as "rumbling"
 
 define SAVE_DELAY = 400; // ms of no changes before writing to flash
@@ -96,11 +102,20 @@ define SAVE_DELAY = 400; // ms of no changes before writing to flash
 define STICK_DOWN = 100;
 define STICK_UP   = -100;
 
+// Snatch back (RT + RS pointing down). If PR2 is pressed less than
+// SNATCH_SHOT_DELAY ms after the snatch was first detected, the shot fires
+// exactly at SNATCH_SHOT_DELAY. Pressed later than that -> rumble logic.
+define SNATCH_RY = 93;
+define SNATCH_SHOT_DELAY = 600;
+int time_since_snatch = RUMBLE_TIME_CAP; // ms since snatch FIRST detected, start high
+int snatch_prev = 0;                     // previous-frame snatch state (edge detect)
+
 define IDLE        = 0;
 define WAIT_RUMBLE = 1;
 define HOLD_DOWN   = 2;
 define PULL_UP     = 3;
 define HOLD_UP     = 4;
+define SNATCH_PAUSE = 5;
 
 define UP_HOLD_TIME = 100; // ms the stick stays at full up before release
 
@@ -123,11 +138,12 @@ int save_timer = 0;
 int saved_timer = 0;
 int digits = 0;
 int rumble_now = 0;
+int snatch_back = 0;
 int time_since_rumble = RUMBLE_TIME_CAP; // start "stale" so nothing fires early
 int wait_timer = 0;
 
 // Latency variables
-int latency_val = 80;
+int latency_val = 90;
 int latency_on = 1; // 0 = off, 1 = on (ON by default)
 
 function print_num(num, x, y) {
@@ -176,6 +192,17 @@ main {
     } else if(time_since_rumble < RUMBLE_TIME_CAP) {
         time_since_rumble = time_since_rumble + get_rtime();
     }
+
+    // ---- background snatch tracking (always runs) ----
+    // The counter restarts only on the rising edge (snatch first detected)
+    // and then keeps counting, even while RT + RS-down are still held.
+    snatch_back = (get_val(XB1_RY) > SNATCH_RY) && (get_val(XB1_RT) > 50);
+    if(snatch_back && !snatch_prev) {
+        time_since_snatch = 0;
+    } else if(time_since_snatch < RUMBLE_TIME_CAP) {
+        time_since_snatch = time_since_snatch + get_rtime();
+    }
+    snatch_prev = snatch_back;
 
     // ---- live tuning: rhythm timing (LT+RT) ----
     adjusting_timing = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RT_BUTTON) > TRIGGER_THRESHOLD;
@@ -303,14 +330,18 @@ main {
         if(saved_timer < 0) { saved_timer = 0; }
     }
 
-    // ---- shot trigger / rumble-sync arming / catch shot ----
+    // ---- shot trigger / snatch / rumble-sync arming / catch shot ----
     if(state == IDLE) {
         if(!adjusting_timing && !adjusting_rumble_cfg && !adjusting_latency) {
             if(event_press(CATCH_BTN)) {
                 // catch shot: fire right away with catch timing, no rumble logic
                 start_shot(CATCH_TIME_MP);
             } else if(event_press(TRIGGER)) {
-                if(time_since_rumble <= RUMBLE_WINDOW_MP) {
+                if(time_since_snatch < SNATCH_SHOT_DELAY) {
+                    // snatch back happened recently: wait until the fixed delay
+                    // (measured from the first detection) has elapsed
+                    state = SNATCH_PAUSE;
+                } else if(time_since_rumble <= RUMBLE_WINDOW_MP) {
                     // a rumble just happened recently enough -> fire now
                     start_shot(TOTAL_TIME_MP);
                 } else {
@@ -323,6 +354,10 @@ main {
     } else if(state == WAIT_RUMBLE) {
         wait_timer = wait_timer + get_rtime();
         if(rumble_now || wait_timer >= RUMBLE_MAXWAIT_MP) {
+            start_shot(TOTAL_TIME_MP);
+        }
+    } else if(state == SNATCH_PAUSE) {
+        if(time_since_snatch >= SNATCH_SHOT_DELAY) {
             start_shot(TOTAL_TIME_MP);
         }
     }
