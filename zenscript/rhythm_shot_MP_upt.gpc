@@ -185,7 +185,9 @@ init {
 }
 
 main {
-    // ---- background rumble tracking (always runs) ----
+
+
+    // ---- background rumble tracking (always runs) ----------------------------------------------------------------------------------------
     rumble_now = get_rumble(RUMBLE_A) >= RUMBLE_DETECT_THRESHOLD || get_rumble(RUMBLE_B) >= RUMBLE_DETECT_THRESHOLD;
     if(rumble_now) {
         time_since_rumble = 0;
@@ -193,7 +195,8 @@ main {
         time_since_rumble = time_since_rumble + get_rtime();
     }
 
-    // ---- background snatch tracking (always runs) ----
+
+    // ---- background snatch tracking (always runs) ----------------------------------------------------------------------------------------
     // The counter restarts only on the rising edge (snatch first detected)
     // and then keeps counting, even while RT + RS-down are still held.
     snatch_back = (get_val(XB1_RY) > SNATCH_RY) && (get_val(XB1_RT) > 50);
@@ -204,7 +207,8 @@ main {
     }
     snatch_prev = snatch_back;
 
-    // ---- live tuning: rhythm timing (LT+RT) ----
+
+    // ---- live tuning: rhythm timing (LT+RT) ----------------------------------------------------------------------------------------
     adjusting_timing = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RT_BUTTON) > TRIGGER_THRESHOLD;
 
     if(adjusting_timing) {
@@ -251,7 +255,9 @@ main {
         set_val(XB1_X, 0);
     }
 
-    // ---- live tuning: rumble-sync window / max wait (LB+RB) ----
+
+
+    // ---- live tuning: rumble-sync window / max wait (LB+RB) --------------------------------------------------
     adjusting_rumble_cfg = get_val(LB_BUTTON) > 0 && get_val(RB_BUTTON) > 0;
 
     if(adjusting_rumble_cfg) {
@@ -285,7 +291,9 @@ main {
         set_val(XB1_RIGHT, 0);
     }
 
-    // ---- live tuning: latency config (LT+RB) ----
+
+
+    // ---- live tuning: latency config (LT+RB) ----------------------------------------------------------------------------------------
     adjusting_latency = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RB_BUTTON) > 0;
 
     if(adjusting_latency) {
@@ -330,7 +338,10 @@ main {
         if(saved_timer < 0) { saved_timer = 0; }
     }
 
-    // ---- shot trigger / snatch / rumble-sync arming / catch shot ----
+
+    // ---- main shot logic ----------------------------------------------------------------------------------------------------------
+
+    // ---- shot trigger / snatch / rumble-sync arming / catch shot ------------------------------------------------------------------
     if(state == IDLE) {
         if(!adjusting_timing && !adjusting_rumble_cfg && !adjusting_latency) {
             if(event_press(CATCH_BTN)) {
