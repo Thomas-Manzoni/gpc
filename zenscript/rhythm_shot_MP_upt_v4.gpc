@@ -1,0 +1,421 @@
+// NBA 2K27 - Rhythm Shooting (Xbox) - v4
+// Cronus Zen / GPC Studio
+//
+// Rhythm shooting = pull the RIGHT STICK DOWN, hold, then flick it
+// quickly UP. This script does the whole motion for you.
+//
+// Triggers (both fire immediately on press):
+//   XB1_PR2 (right paddle 2) -> shot, uses TOTAL_TIME_MP (DRIBBLE on OLED).
+//                               A new rumble during the hold-down adds
+//                               RUMBLE_HOLD_BONUS ms to the hold time.
+//   XB1_PL2 (left paddle 2)  -> catch shot, uses CATCH_TIME_MP
+//   XB1_PL1 (left paddle 1)  -> with left stick past X_HOLD_STICK_MIN %,
+//                               holds X for X_HOLD_TIME ms
+//
+// Rumble and snatch-back detection still run in the background
+// (time_since_rumble / time_since_snatch) for future use, but nothing
+// waits on them.
+//
+// Live tuning (auto-saved, Latency resets on script reload):
+//   LT + RT + D-Pad LEFT / RIGHT -> TOTAL_TIME_MP (DRIBBLE)  -1 / +1
+//   LT + RT + D-Pad DOWN / UP    -> RISE_TIME_MP              -1 / +1
+//   LT + RT + X / B              -> CATCH_TIME_MP             -1 / +1
+//   LT + RB + D-Pad LEFT / RIGHT -> LATENCY VALUE             -1 / +1
+//   LT + RB + D-Pad DOWN / UP    -> LATENCY TOGGLE            OFF / ON
+
+define TRIGGER   = XB1_PR2; // right paddle 2 (main shot)
+define CATCH_BTN = XB1_PL2; // left paddle 2 (catch shot)
+define RX        = XB1_RX;
+define RY        = XB1_RY;
+define LT_BUTTON = XB1_LT;
+define RT_BUTTON = XB1_RT;
+define RB_BUTTON = XB1_RB;
+
+define TRIGGER_THRESHOLD = 50; // LT/RT are analog, 0-100
+
+define SHOT_STATIC = 0;
+
+define TOTAL_TIME_MIN     = 100;
+define TOTAL_TIME_MAX     = 2000;
+define TOTAL_TIME_DEFAULT = 555;
+
+define CATCH_TIME_MIN     = 100;
+define CATCH_TIME_MAX     = 2000;
+define CATCH_TIME_DEFAULT = 523;
+
+define RISE_TIME_MIN     = 5;   // keeps the ramp maths inside 16-bit
+define RISE_TIME_MAX     = 300;
+define RISE_TIME_DEFAULT = 75;
+
+define RUMBLE_TIME_CAP         = 5000; // cap the background counters, avoid overflow
+define RUMBLE_DETECT_THRESHOLD = 1;    // any motor value >= this counts as "rumbling"
+
+define SAVE_DELAY = 400; // ms of no changes before writing to flash
+
+// Right stick Y: +100 = down, -100 = up
+define STICK_DOWN = 100;
+define STICK_UP   = -100;
+
+// Snatch back detection (RT + RS pointing down), unused by the shot for now
+define SNATCH_RY = 93;
+int time_since_snatch = RUMBLE_TIME_CAP;
+int snatch_prev = 0;
+
+define IDLE      = 0;
+define HOLD_DOWN = 1;
+define PULL_UP   = 2;
+define HOLD_UP   = 3;
+
+define UP_HOLD_TIME = 100; // ms the stick stays at full up before release
+
+define X_NOISE = 2; // RX jitter during the shot, +/- this value (0 = perfectly straight)
+define X_PATH_MAX = 30; // random RX at the bottom and at the top of the pull, +/- this value (0 = vertical)
+
+define RUMBLE_HOLD_BONUS = 50; // ms added to the hold-down time per new rumble during the hold
+define NOTIFY_RUMBLE_MS  = 100; // length of each of the two notification rumbles (and the gap)
+define NOTIFY_RUMBLE_PWR = 100; // notification rumble intensity, 0-100
+
+define X_HOLD_TIME      = 200; // ms the X button is held by the PL1 action
+define X_HOLD_STICK_MIN = 70;  // left stick modulus (%) needed for the PL1 action
+
+int profile = SHOT_STATIC;
+int TOTAL_TIME_MP;
+int CATCH_TIME_MP;
+int RISE_TIME_MP;
+int state = IDLE;
+int timer = 0;
+int hold_time = 0;
+int rise = 0;
+int value = 0;
+int x_start = 0;
+int x_end = 0;
+int y_start = 0;
+int y_end = 0;
+int x_val = 0;
+int adjusting_timing = 0;
+int rumble_prev = 0;
+int rumble_new = 0;
+int bonus_hit = 0;
+int notify_timer = 0;
+int x_hold_timer = 0;
+
+int adjusting_latency = 0;
+int dirty = 0;
+int save_timer = 0;
+int saved_timer = 0;
+int digits = 0;
+int rumble_now = 0;
+int snatch_back = 0;
+int time_since_rumble = RUMBLE_TIME_CAP;
+
+int latency_val = 55;
+int latency_on = 1; // 0 = off, 1 = on
+
+function print_num(num, x, y) {
+    digits = 0;
+    if(num >= 1000) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + ((num / 1000) % 10));
+    }
+    if(num >= 100) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + ((num / 100) % 10));
+    }
+    if(num >= 10) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + ((num / 10) % 10));
+    }
+    digits = digits + 1;
+    putc_oled(digits, ASCII_DIGIT0 + (num % 10));
+    puts_oled(x, y, OLED_FONT_MEDIUM, digits, OLED_WHITE);
+}
+
+// Starts the stick motion with the given hold-down time (+ latency if on)
+function start_shot(ht) {
+    rise      = RISE_TIME_MP;
+    hold_time = ht;
+    if(latency_on) { hold_time = hold_time + latency_val; }
+    timer     = 0;
+    state     = HOLD_DOWN;
+    bonus_hit = 0;
+    x_start   = random(0, X_PATH_MAX * 2) - X_PATH_MAX;
+    x_end     = random(0, X_PATH_MAX * 2) - X_PATH_MAX;
+    // keep the endpoints on the radius-100 circle: y ~= 100 - x^2/200 (no sqrt in GPC)
+    y_start   = STICK_DOWN - ((x_start * x_start) / 200);
+    y_end     = STICK_UP + ((x_end * x_end) / 200);
+}
+
+init {
+    // SPVAR_7..9 so this script doesn't share saved values with the original (SPVAR_2..6)
+    TOTAL_TIME_MP = get_pvar(SPVAR_7, TOTAL_TIME_MIN, TOTAL_TIME_MAX, TOTAL_TIME_DEFAULT);
+    RISE_TIME_MP  = get_pvar(SPVAR_8, RISE_TIME_MIN,  RISE_TIME_MAX,  RISE_TIME_DEFAULT);
+    CATCH_TIME_MP = get_pvar(SPVAR_9, CATCH_TIME_MIN, CATCH_TIME_MAX, CATCH_TIME_DEFAULT);
+}
+
+main {
+
+    // ---- background rumble tracking (always runs) ----
+    rumble_now = get_rumble(RUMBLE_A) >= RUMBLE_DETECT_THRESHOLD || get_rumble(RUMBLE_B) >= RUMBLE_DETECT_THRESHOLD;
+    if(rumble_now) {
+        time_since_rumble = 0;
+    } else if(time_since_rumble < RUMBLE_TIME_CAP) {
+        time_since_rumble = time_since_rumble + get_rtime();
+    }
+    // rising edge = a new rumble pulse; used by the hold-down extension
+    rumble_new  = rumble_now && !rumble_prev;
+    rumble_prev = rumble_now;
+
+    // ---- background snatch tracking (always runs) ----
+    snatch_back = (get_val(XB1_RY) > SNATCH_RY) && (get_val(XB1_RT) > 50);
+    if(snatch_back && !snatch_prev) {
+        time_since_snatch = 0;
+    } else if(time_since_snatch < RUMBLE_TIME_CAP) {
+        time_since_snatch = time_since_snatch + get_rtime();
+    }
+    snatch_prev = snatch_back;
+
+    // ---- live tuning: rhythm timing (LT+RT) ----
+    adjusting_timing = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RT_BUTTON) > TRIGGER_THRESHOLD;
+
+    if(adjusting_timing) {
+        if(event_press(XB1_RIGHT) && TOTAL_TIME_MP < TOTAL_TIME_MAX) {
+            TOTAL_TIME_MP = TOTAL_TIME_MP + 1;
+            dirty         = 1;
+            save_timer    = SAVE_DELAY;
+        }
+        if(event_press(XB1_LEFT) && TOTAL_TIME_MP > TOTAL_TIME_MIN) {
+            TOTAL_TIME_MP = TOTAL_TIME_MP - 1;
+            dirty         = 1;
+            save_timer    = SAVE_DELAY;
+        }
+        if(event_press(XB1_UP) && RISE_TIME_MP < RISE_TIME_MAX) {
+            RISE_TIME_MP = RISE_TIME_MP + 1;
+            dirty        = 1;
+            save_timer   = SAVE_DELAY;
+        }
+        if(event_press(XB1_DOWN) && RISE_TIME_MP > RISE_TIME_MIN) {
+            RISE_TIME_MP = RISE_TIME_MP - 1;
+            dirty        = 1;
+            save_timer   = SAVE_DELAY;
+        }
+        // catch timing: B = plus, X = minus
+        if(event_press(XB1_B) && CATCH_TIME_MP < CATCH_TIME_MAX) {
+            CATCH_TIME_MP = CATCH_TIME_MP + 1;
+            dirty         = 1;
+            save_timer    = SAVE_DELAY;
+        }
+        if(event_press(XB1_X) && CATCH_TIME_MP > CATCH_TIME_MIN) {
+            CATCH_TIME_MP = CATCH_TIME_MP - 1;
+            dirty         = 1;
+            save_timer    = SAVE_DELAY;
+        }
+
+        // don't let the tuning combo leak inputs into the game
+        set_val(LT_BUTTON, 0);
+        set_val(RT_BUTTON, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+        set_val(XB1_B, 0);
+        set_val(XB1_X, 0);
+    }
+
+    // ---- live tuning: latency config (LT+RB) ----
+    adjusting_latency = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RB_BUTTON) > 0;
+
+    if(adjusting_latency) {
+        if(event_press(XB1_RIGHT)) {
+            latency_val = latency_val + 1;
+        }
+        if(event_press(XB1_LEFT)) {
+            if(latency_val > 0) { latency_val = latency_val - 1; }
+        }
+        if(event_press(XB1_UP)) {
+            latency_on = 1;
+        }
+        if(event_press(XB1_DOWN)) {
+            latency_on = 0;
+        }
+
+        set_val(LT_BUTTON, 0);
+        set_val(RB_BUTTON, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+    }
+
+    // debounced write so holding a direction doesn't hammer the flash
+    if(dirty) {
+        save_timer = save_timer - get_rtime();
+        if(save_timer <= 0) {
+            set_pvar(SPVAR_7, TOTAL_TIME_MP);
+            set_pvar(SPVAR_8, RISE_TIME_MP);
+            set_pvar(SPVAR_9, CATCH_TIME_MP);
+            dirty       = 0;
+            saved_timer = 800;
+        }
+    }
+
+    if(saved_timer > 0) {
+        saved_timer = saved_timer - get_rtime();
+        if(saved_timer < 0) { saved_timer = 0; }
+    }
+
+    // ---- shot trigger: fires immediately on press ----
+    if(state == IDLE) {
+        if(!adjusting_timing && !adjusting_latency) {
+            if(event_press(CATCH_BTN)) {
+                start_shot(CATCH_TIME_MP);
+            } else if(event_press(TRIGGER)) {
+                start_shot(TOTAL_TIME_MP);
+            }
+        }
+    }
+
+    if(state != IDLE) {
+        set_val(TRIGGER, 0);   // don't send the paddle presses to the game
+        set_val(CATCH_BTN, 0);
+    }
+
+    // ---- PL1 + left stick past threshold: hold X ----
+    // squared compare avoids sqrt; max 100^2 + 100^2 still fits 16-bit
+    if(!adjusting_timing && event_press(XB1_PL1)
+       && (get_val(XB1_LX) * get_val(XB1_LX)) + (get_val(XB1_LY) * get_val(XB1_LY)) > X_HOLD_STICK_MIN * X_HOLD_STICK_MIN) {
+        x_hold_timer = X_HOLD_TIME;
+    }
+    if(x_hold_timer > 0) {
+        set_val(XB1_X, 100);
+        x_hold_timer = x_hold_timer - get_rtime();
+    }
+    if(get_val(XB1_PL1)) { set_val(XB1_PL1, 0); }
+
+    if(state != IDLE) {
+        // X path and noise only; timing is untouched
+        timer = timer + get_rtime();
+
+        if(state == HOLD_DOWN) {
+            set_val(RY, y_start);
+            x_val = x_start;
+            if(rumble_new) {
+                hold_time = hold_time + RUMBLE_HOLD_BONUS;
+                bonus_hit = 1;
+            }
+            if(timer >= hold_time) {
+                timer = 0;
+                state = PULL_UP;
+            }
+        } else if(state == PULL_UP) {
+            if(timer >= rise) {
+                set_val(RY, y_end);
+                x_val = x_end;
+                timer = 0;
+                state = HOLD_UP;
+            } else {
+                // linear ramp from the start point to the end point
+                // fraction is 0-100 first to stay inside 16-bit maths
+                value = y_start + (((y_end - y_start) * ((timer * 100) / rise)) / 100);
+                set_val(RY, value);
+                x_val = x_start + (((x_end - x_start) * timer) / rise);
+            }
+        } else {
+            set_val(RY, y_end);
+            x_val = x_end;
+            if(timer >= UP_HOLD_TIME) {
+                timer = 0;
+                state = IDLE;
+                if(bonus_hit) {
+                    bonus_hit    = 0;
+                    notify_timer = 1;
+                }
+            }
+        }
+        set_val(RX, x_val + random(0, X_NOISE * 2) - X_NOISE);
+    }
+
+    // two quick rumbles: on, gap, on
+    if(notify_timer > 0) {
+        if(notify_timer < NOTIFY_RUMBLE_MS || (notify_timer >= NOTIFY_RUMBLE_MS * 2 && notify_timer < NOTIFY_RUMBLE_MS * 3)) {
+            set_rumble(RUMBLE_A, NOTIFY_RUMBLE_PWR);
+            set_rumble(RUMBLE_B, NOTIFY_RUMBLE_PWR);
+        }
+        notify_timer = notify_timer + get_rtime();
+        if(notify_timer >= NOTIFY_RUMBLE_MS * 3) { notify_timer = 0; }
+    }
+
+    cls_oled(OLED_BLACK);
+
+    if(profile == SHOT_STATIC) {
+        putc_oled(1, ASCII_UPPER_M);
+        putc_oled(2, ASCII_UPPER_P);
+        putc_oled(3, ASCII_SPACE);
+        putc_oled(4, ASCII_UPPER_S);
+        putc_oled(5, ASCII_UPPER_H);
+        putc_oled(6, ASCII_UPPER_O);
+        putc_oled(7, ASCII_UPPER_T);
+        puts_oled(2, 0, OLED_FONT_MEDIUM, 7, OLED_WHITE);
+    }
+
+    if(adjusting_latency) {
+        putc_oled(1, ASCII_UPPER_L);
+        putc_oled(2, ASCII_UPPER_A);
+        putc_oled(3, ASCII_UPPER_T);
+        puts_oled(2, 22, OLED_FONT_SMALL, 3, OLED_WHITE);
+
+        putc_oled(1, ASCII_UPPER_S);
+        putc_oled(2, ASCII_UPPER_T);
+        putc_oled(3, ASCII_UPPER_A);
+        putc_oled(4, ASCII_UPPER_T);
+        puts_oled(76, 22, OLED_FONT_SMALL, 4, OLED_WHITE);
+
+        print_num(latency_val, 2, 34);
+
+        if(latency_on) {
+            putc_oled(1, ASCII_UPPER_O);
+            putc_oled(2, ASCII_UPPER_N);
+            puts_oled(76, 34, OLED_FONT_MEDIUM, 2, OLED_WHITE);
+        } else {
+            putc_oled(1, ASCII_UPPER_O);
+            putc_oled(2, ASCII_UPPER_F);
+            putc_oled(3, ASCII_UPPER_F);
+            puts_oled(76, 34, OLED_FONT_MEDIUM, 3, OLED_WHITE);
+        }
+    } else {
+        // default: DRIBBLE / CATCH / RISE (three columns)
+        putc_oled(1, ASCII_UPPER_D);
+        putc_oled(2, ASCII_UPPER_R);
+        putc_oled(3, ASCII_UPPER_I);
+        putc_oled(4, ASCII_UPPER_B);
+        putc_oled(5, ASCII_UPPER_B);
+        putc_oled(6, ASCII_UPPER_L);
+        putc_oled(7, ASCII_UPPER_E);
+        puts_oled(2, 22, OLED_FONT_SMALL, 7, OLED_WHITE);
+
+        putc_oled(1, ASCII_UPPER_C);
+        putc_oled(2, ASCII_UPPER_A);
+        putc_oled(3, ASCII_UPPER_T);
+        putc_oled(4, ASCII_UPPER_C);
+        putc_oled(5, ASCII_UPPER_H);
+        puts_oled(48, 22, OLED_FONT_SMALL, 5, OLED_WHITE);
+
+        putc_oled(1, ASCII_UPPER_R);
+        putc_oled(2, ASCII_UPPER_I);
+        putc_oled(3, ASCII_UPPER_S);
+        putc_oled(4, ASCII_UPPER_E);
+        puts_oled(94, 22, OLED_FONT_SMALL, 4, OLED_WHITE);
+
+        print_num(TOTAL_TIME_MP, 2, 34);
+        print_num(CATCH_TIME_MP, 48, 34);
+        print_num(RISE_TIME_MP, 94, 34);
+    }
+
+    if(saved_timer > 0) {
+        putc_oled(1, ASCII_UPPER_S);
+        putc_oled(2, ASCII_UPPER_A);
+        putc_oled(3, ASCII_UPPER_V);
+        putc_oled(4, ASCII_UPPER_E);
+        putc_oled(5, ASCII_UPPER_D);
+        puts_oled(2, 54, OLED_FONT_SMALL, 5, OLED_WHITE);
+    }
+}
