@@ -37,7 +37,7 @@ define SHOT_STATIC = 0;
 
 define TOTAL_TIME_MIN     = 100;
 define TOTAL_TIME_MAX     = 2000;
-define TOTAL_TIME_DEFAULT = 555;
+define TOTAL_TIME_DEFAULT = 563;
 
 define CATCH_TIME_MIN     = 100;
 define CATCH_TIME_MAX     = 2000;
@@ -45,7 +45,7 @@ define CATCH_TIME_DEFAULT = 523;
 
 define RISE_TIME_MIN     = 5;   // keeps the ramp maths inside 16-bit
 define RISE_TIME_MAX     = 300;
-define RISE_TIME_DEFAULT = 75;
+define RISE_TIME_DEFAULT = 100;
 
 define RUMBLE_TIME_CAP         = 5000; // cap the background counters, avoid overflow
 define RUMBLE_DETECT_THRESHOLD = 1;    // any motor value >= this counts as "rumbling"
@@ -71,11 +71,11 @@ define UP_HOLD_TIME = 100; // ms the stick stays at full up before release
 define X_NOISE = 2; // RX jitter during the shot, +/- this value (0 = perfectly straight)
 define X_PATH_MAX = 30; // random RX at the bottom and at the top of the pull, +/- this value (0 = vertical)
 
-define RUMBLE_HOLD_BONUS = 50; // ms added to the hold-down time per new rumble during the hold
+define RUMBLE_HOLD_BONUS = 35; // ms added to the hold-down time per new rumble during the hold
 define NOTIFY_RUMBLE_MS  = 100; // length of each of the two notification rumbles (and the gap)
-define NOTIFY_RUMBLE_PWR = 100; // notification rumble intensity, 0-100
+define NOTIFY_RUMBLE_PWR = 50; // notification rumble intensity, 0-100
 
-define X_HOLD_TIME      = 200; // ms the X button is held by the PL1 action
+define X_HOLD_TIME      = 250; // ms the X button is held by the PL1 action
 define X_HOLD_STICK_MIN = 70;  // left stick modulus (%) needed for the PL1 action
 
 int profile = SHOT_STATIC;
@@ -339,9 +339,14 @@ main {
         if(notify_timer < NOTIFY_RUMBLE_MS || (notify_timer >= NOTIFY_RUMBLE_MS * 2 && notify_timer < NOTIFY_RUMBLE_MS * 3)) {
             set_rumble(RUMBLE_A, NOTIFY_RUMBLE_PWR);
             set_rumble(RUMBLE_B, NOTIFY_RUMBLE_PWR);
+        } else {
+            reset_rumble(); // set_rumble overrides persist until reset
         }
         notify_timer = notify_timer + get_rtime();
-        if(notify_timer >= NOTIFY_RUMBLE_MS * 3) { notify_timer = 0; }
+        if(notify_timer >= NOTIFY_RUMBLE_MS * 3) {
+            notify_timer = 0;
+            reset_rumble();
+        }
     }
 
     cls_oled(OLED_BLACK);
