@@ -80,9 +80,9 @@ define HOLD_UP   = 3;
 define UP_HOLD_TIME = 100; // ms the stick stays at full up before release
 
 define X_NOISE = 2; // RX jitter during the shot, +/- this value (0 = perfectly straight)
-define X_PATH_MAX = 30; // random RX at the bottom and at the top of the pull, +/- this value (0 = vertical)
+define X_PATH_MAX = 15; // random RX at the bottom and at the top of the pull, +/- this value (0 = vertical)
 
-define RUMBLE_HOLD_BONUS = 35; // ms added to the hold-down time per new rumble during the hold
+define RUMBLE_HOLD_BONUS = 0; // ms added to the hold-down time per new rumble during the hold
 define NOTIFY_RUMBLE_MS  = 100; // length of each of the two notification rumbles (and the gap)
 define NOTIFY_RUMBLE_PWR = 50; // notification rumble intensity, 0-100
 
