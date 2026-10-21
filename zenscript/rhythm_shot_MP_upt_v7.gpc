@@ -74,7 +74,7 @@ define SHOT_STATIC = 0;
 
 define TOTAL_TIME_MIN     = 100;
 define TOTAL_TIME_MAX     = 2000;
-define TOTAL_TIME_DEFAULT = 564;
+define TOTAL_TIME_DEFAULT = 567;
 
 define CATCH_TIME_MIN     = 100;
 define CATCH_TIME_MAX     = 2000;
@@ -295,7 +295,7 @@ init {
     TOTAL_TIME_MP = get_pvar(SPVAR_7, TOTAL_TIME_MIN, TOTAL_TIME_MAX, TOTAL_TIME_DEFAULT);
     RISE_TIME_MP  = get_pvar(SPVAR_8, RISE_TIME_MIN,  RISE_TIME_MAX,  RISE_TIME_DEFAULT);
     CATCH_TIME_MP = get_pvar(SPVAR_9, CATCH_TIME_MIN, CATCH_TIME_MAX, CATCH_TIME_DEFAULT);
-    trigger_btn   = get_pvar(SPVAR_10, 0, 100, TRIGGER_DEFAULT);
+    trigger_btn   = get_pvar(SPVAR_10, 1, 100, TRIGGER_DEFAULT);
 }
 
 main {
