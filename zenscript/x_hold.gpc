@@ -1,0 +1,118 @@
+// NBA 2K27 - Simple X Hold (Xbox)
+// Cronus Zen / GPC Studio
+//
+// Press the shot trigger -> the script holds X for HOLD_TIME ms.
+// No right stick motion, nothing else.
+//
+// Triggers:
+//   XB1_PR2 (right paddle 2) -> hold X for HOLD_TIME
+//   XB1_PL2 (left paddle 2)  -> same thing (second paddle, optional)
+//
+// Live tuning (not saved, resets to HOLD_TIME_DEFAULT on reload):
+//   LT + RT + D-Pad LEFT / RIGHT -> HOLD_TIME -1 / +1
+//   LT + RT + D-Pad DOWN / UP    -> HOLD_TIME -10 / +10
+
+define TRIGGER   = XB1_PR2; // right paddle 2
+define TRIGGER_2 = XB1_PL2; // left paddle 2
+define LT_BUTTON = XB1_LT;
+define RT_BUTTON = XB1_RT;
+
+define TRIGGER_THRESHOLD = 50; // LT/RT are analog, 0-100
+
+define HOLD_TIME_MIN     = 20;
+define HOLD_TIME_MAX     = 2000;
+define HOLD_TIME_DEFAULT = 800;
+
+int hold_time = HOLD_TIME_DEFAULT;
+int x_timer   = 0;
+int adjusting = 0;
+int digits    = 0;
+
+function print_num(num, x, y) {
+    digits = 0;
+    if(num >= 1000) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + ((num / 1000) % 10));
+    }
+    if(num >= 100) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + ((num / 100) % 10));
+    }
+    if(num >= 10) {
+        digits = digits + 1;
+        putc_oled(digits, ASCII_DIGIT0 + ((num / 10) % 10));
+    }
+    digits = digits + 1;
+    putc_oled(digits, ASCII_DIGIT0 + (num % 10));
+    puts_oled(x, y, OLED_FONT_MEDIUM, digits, OLED_WHITE);
+}
+
+main {
+
+    // ---- live tuning (LT + RT) ----
+    adjusting = get_val(LT_BUTTON) > TRIGGER_THRESHOLD && get_val(RT_BUTTON) > TRIGGER_THRESHOLD;
+
+    if(adjusting) {
+        if(event_press(XB1_RIGHT) && hold_time < HOLD_TIME_MAX) {
+            hold_time = hold_time + 5;
+        }
+        if(event_press(XB1_LEFT) && hold_time > HOLD_TIME_MIN) {
+            hold_time = hold_time - 5;
+        }
+        if(event_press(XB1_UP)) {
+            hold_time = hold_time + 10;
+            if(hold_time > HOLD_TIME_MAX) { hold_time = HOLD_TIME_MAX; }
+        }
+        if(event_press(XB1_DOWN)) {
+            hold_time = hold_time - 10;
+            if(hold_time < HOLD_TIME_MIN) { hold_time = HOLD_TIME_MIN; }
+        }
+
+        // don't let the tuning combo leak inputs into the game
+        set_val(LT_BUTTON, 0);
+        set_val(RT_BUTTON, 0);
+        set_val(XB1_UP, 0);
+        set_val(XB1_DOWN, 0);
+        set_val(XB1_LEFT, 0);
+        set_val(XB1_RIGHT, 0);
+    }
+
+    // ---- trigger: start the X hold ----
+    if(!adjusting && x_timer <= 0
+       && (event_press(TRIGGER) || event_press(TRIGGER_2))) {
+        x_timer = hold_time;
+    }
+
+    if(x_timer > 0) {
+        set_val(XB1_X, 100);
+        x_timer = x_timer - get_rtime();
+    }
+
+    // keep the paddles out of the game
+    set_val(TRIGGER, 0);
+    set_val(TRIGGER_2, 0);
+
+    cls_oled(OLED_BLACK);
+
+    putc_oled(1, ASCII_UPPER_X);
+    putc_oled(2, ASCII_SPACE);
+    putc_oled(3, ASCII_UPPER_H);
+    putc_oled(4, ASCII_UPPER_O);
+    putc_oled(5, ASCII_UPPER_L);
+    putc_oled(6, ASCII_UPPER_D);
+    puts_oled(2, 0, OLED_FONT_MEDIUM, 6, OLED_WHITE);
+
+    putc_oled(1, ASCII_UPPER_T);
+    putc_oled(2, ASCII_UPPER_I);
+    putc_oled(3, ASCII_UPPER_M);
+    putc_oled(4, ASCII_UPPER_E);
+    puts_oled(2, 22, OLED_FONT_SMALL, 4, OLED_WHITE);
+
+    print_num(hold_time, 2, 34);
+
+    if(x_timer > 0) {
+        putc_oled(1, ASCII_UPPER_O);
+        putc_oled(2, ASCII_UPPER_N);
+        puts_oled(110, 34, OLED_FONT_MEDIUM, 2, OLED_WHITE);
+    }
+}
